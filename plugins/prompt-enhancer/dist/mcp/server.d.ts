@@ -9,6 +9,7 @@ export declare const TOOLS: readonly McpTool[];
 export interface McpDeps {
     readonly enhancer: PromptEnhancerService;
     readonly serverName?: string;
+    /** Plugin version; index.ts resolves it from package.json (single source). */
     readonly serverVersion?: string;
 }
 export declare function handleMessage(msg: JsonRpcRequest, deps: McpDeps): Promise<JsonRpcResponse | null>;

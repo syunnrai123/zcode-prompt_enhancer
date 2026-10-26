@@ -7,38 +7,52 @@
  */
 import { EnhancerError } from '../core/types.js';
 /**
- * POST the request and parse a streaming SSE response. Uses the injection
- * parameter `fetchImpl` so tests can stub the network entirely.
+ * POST the request and parse a streaming SSE response. The timeout is a
+ * WALL-CLOCK budget over the whole exchange: headers AND the streamed body.
+ * The AbortController stays armed until the stream has been fully consumed,
+ * so a provider that sends headers and then stalls cannot hang the caller.
+ * Uses the injection parameter `fetchImpl` so tests can stub the network
+ * entirely.
  */
 export async function postSse(req, callbacks, fetchImpl = fetch) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), req.timeoutMs);
-    let response;
     try {
-        response = await fetchImpl(req.url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...req.headers },
-            body: JSON.stringify(req.body),
-            signal: controller.signal,
-        });
-    }
-    catch (error) {
-        throw controller.signal.aborted
-            ? new EnhancerError('PROVIDER_TIMEOUT', `Request aborted after ${req.timeoutMs}ms`, error)
-            : new EnhancerError('PROVIDER_UNAVAILABLE', `Network request failed: ${errorMessage(error)}`, error);
+        let response;
+        try {
+            response = await fetchImpl(req.url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...req.headers },
+                body: JSON.stringify(req.body),
+                signal: controller.signal,
+            });
+        }
+        catch (error) {
+            throw controller.signal.aborted
+                ? new EnhancerError('PROVIDER_TIMEOUT', `Request aborted after ${req.timeoutMs}ms`, error)
+                : new EnhancerError('PROVIDER_UNAVAILABLE', `Network request failed: ${errorMessage(error)}`, error);
+        }
+        if (!response.ok) {
+            const detail = await response.text().catch(() => '');
+            throw new EnhancerError('PROVIDER_UNAVAILABLE', `Provider returned HTTP ${response.status}: ${truncate(detail, 300)}`);
+        }
+        const body = response.body;
+        if (!body) {
+            throw new EnhancerError('PROVIDER_UNAVAILABLE', 'Provider returned an empty body');
+        }
+        try {
+            await readSseStream(body, callbacks);
+        }
+        catch (error) {
+            // A timer abort surfaces as a read() rejection on the body stream.
+            throw controller.signal.aborted
+                ? new EnhancerError('PROVIDER_TIMEOUT', `Stream aborted after ${req.timeoutMs}ms`, error)
+                : new EnhancerError('PROVIDER_UNAVAILABLE', `Stream failed: ${errorMessage(error)}`, error);
+        }
     }
     finally {
         clearTimeout(timer);
     }
-    if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        throw new EnhancerError('PROVIDER_UNAVAILABLE', `Provider returned HTTP ${response.status}: ${truncate(detail, 300)}`);
-    }
-    const body = response.body;
-    if (!body) {
-        throw new EnhancerError('PROVIDER_UNAVAILABLE', 'Provider returned an empty body');
-    }
-    await readSseStream(body, callbacks);
 }
 async function readSseStream(body, callbacks) {
     const reader = body.getReader();
@@ -89,7 +103,9 @@ export function truncate(text, maxLength) {
  * Retry-once wrapper for idempotent streaming calls that fail before any
  * content was received. Once deltas have flushed, retrying would duplicate
  * partial output, so only cold-start failures (connection refused, TLS
- * handshake, first-byte timeout) get a second attempt.
+ * handshake, first-byte errors) get a second attempt. Timeouts are never
+ * retried: a second attempt would double the caller's wall-clock wait beyond
+ * the configured hard timeout.
  */
 export async function withColdStartRetry(run, hasReceivedContent) {
     try {
@@ -97,6 +113,8 @@ export async function withColdStartRetry(run, hasReceivedContent) {
     }
     catch (error) {
         if (hasReceivedContent())
+            throw error;
+        if (error instanceof EnhancerError && error.code === 'PROVIDER_TIMEOUT')
             throw error;
         return await run();
     }

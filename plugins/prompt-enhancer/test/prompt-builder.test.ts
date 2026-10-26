@@ -94,10 +94,11 @@ describe('getLanguageFromPath', () => {
 });
 
 describe('computeMaxTokens', () => {
-  it('floors at 1024 and ceilings at 4096 with the 0.8x formula', () => {
+  it('floors at 1024 and ceilings at 8192 with the 0.8x formula', () => {
     assert.equal(computeMaxTokens(10), 1024);
     assert.equal(computeMaxTokens(2000), 1600);
-    assert.equal(computeMaxTokens(999_999), 4096);
+    assert.equal(computeMaxTokens(10_000), 8000);
+    assert.equal(computeMaxTokens(999_999), 8192);
     assert.equal(computeMaxTokens(NaN), 1024);
   });
 });

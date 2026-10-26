@@ -57,13 +57,13 @@ index.ts                     组合根:唯一知道拼装方式的文件
 - **精炼契约**:`system-prompt.ts` 强制 ≤1.5x 长度、最多一个文件锚点、禁止填充话术;
   上下文预算同步收紧(选区 1500 / 光标 800 / 当前文件 2000 / 关联文件 1200,
   关联文件超 300 字符只传路径),更少输入 token、更快的首 token、更精炼的输出。
-- **max_tokens 按输入伸缩**:`min(4096, max(1024, len*0.8))`——按 CJK 最坏情形覆盖
+- **max_tokens 按输入伸缩**:`min(8192, max(1024, len*0.8))`——按 CJK 最坏情形覆盖
   「轻度润色不改写」的输出上限,同时防止模型越写越长。
 - **流式体验**:CLI `[CONTENT_DELTA]` 标记逐段回传,桌面预览面板边生成边显示,
   用户感知延迟 ≈ 首 token 时间。
-- **冷启动单次重试**:已有内容落地后不再重试,避免重复输出。
+- **超时为真·墙钟预算**:15–180s 钳位,覆盖建连、响应头与**流式 body 全程**——provider 停发数据也会被中止并报 `PROVIDER_TIMEOUT`,不会挂死。
+- **冷启动单次重试**:已有内容落地后不再重试,避免重复输出;**超时不重试**(重试会使等待翻倍,超出墙钟语义)。
 - **Anthropic 关闭 thinking**:防止推理模型把 token 预算花在 thinking 块上导致正文为空。
-- **超时硬上限** 15–180s 钳位,防泄漏挂死。
 - **桌面层可逆**:app.asar 只追加/剥离一行注入;`remove` 后归档内容与官方一致,
   回环测试按字节验证。
 
@@ -72,10 +72,14 @@ index.ts                     组合根:唯一知道拼装方式的文件
 ```bash
 cd plugins/prompt-enhancer
 npm install        # 仅 devDependencies(typescript、@types/node)
-npm run build      # tsc → dist/
-npm test           # 41 个测试:管线单测 + asar 补丁回环
-npm run smoke      # 进程级端到端:initialize→tools/list→tools/call + CLI 标记协议
+npm run build      # tsc → dist/,并同步 system-prompt.generated.js 与 overlay 版本号
+npm test           # 71 个测试:管线单测 + 超时回归 + asar 补丁回环
+npm run smoke      # 进程级端到端:MCP 握手 + CLI 标记协议 + 版本/生成物一致性校验
 ```
+
+版本号以 `package.json` 为单一来源:MCP `serverInfo.version` 运行时读取 manifest;
+`overlay.js` 的 `VERSION` 由构建脚本盖章;`smoke` 校验三者与
+`system-prompt.generated.js` 一致,可在发布前拦截「改了源码忘记 build」的漂移。
 
 本地无密钥冒烟:设置 `PROMPT_ENHANCER_PROVIDER=mock`。
 
@@ -87,7 +91,7 @@ npm run smoke      # 进程级端到端:initialize→tools/list→tools/call + C
 | api_key | 空 | 留空则读环境变量 `ZAI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` |
 | base_url | 空 | 各提供方官方默认 |
 | model | 空 | glm→`glm-4.6`,openai→`gpt-4o-mini`,anthropic→`claude-sonnet-4-5` |
-| timeout_seconds | 60 | 单次增强硬超时(15–180 钳位) |
+| timeout_seconds | 60 | 单次增强墙钟超时(15–180 钳位,覆盖建连到流式结束) |
 
 未配置任何密钥时,`/enhance-prompt` 自动降级为**就地增强**:命令 Markdown 内嵌与
 `system-prompt.ts` 完全一致的规则(也可通过 `get_enhancement_rules` 工具取原文),

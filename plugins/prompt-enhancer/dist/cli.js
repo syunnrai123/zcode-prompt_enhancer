@@ -67,6 +67,7 @@ async function main() {
         if (!prompt.trim()) {
             process.stdout.write('[ENHANCED]\n');
             flushExit(0);
+            return;
         }
         const container = buildContainer();
         const enhancer = container.resolve(Tokens.Enhancer);

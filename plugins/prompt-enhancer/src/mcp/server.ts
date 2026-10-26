@@ -21,7 +21,12 @@ import type { JsonRpcId, JsonRpcRequest, JsonRpcResponse } from './stdio.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'prompt-enhancer';
-const SERVER_VERSION = '0.3.0';
+/**
+ * Version reported in `initialize`. The composition root (index.ts) reads it
+ * from package.json at runtime; this fallback only shows when a caller wires
+ * runMcpServer by hand without passing the version (tests).
+ */
+const SERVER_VERSION_FALLBACK = '0.0.0';
 
 export interface McpTool {
   readonly name: string;
@@ -83,6 +88,7 @@ export const TOOLS: readonly McpTool[] = [
 export interface McpDeps {
   readonly enhancer: PromptEnhancerService;
   readonly serverName?: string;
+  /** Plugin version; index.ts resolves it from package.json (single source). */
   readonly serverVersion?: string;
 }
 
@@ -95,7 +101,10 @@ export async function handleMessage(msg: JsonRpcRequest, deps: McpDeps): Promise
       return response(msg.id, {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: {} },
-        serverInfo: { name: deps.serverName ?? SERVER_NAME, version: deps.serverVersion ?? SERVER_VERSION },
+        serverInfo: {
+          name: deps.serverName ?? SERVER_NAME,
+          version: deps.serverVersion ?? SERVER_VERSION_FALLBACK,
+        },
       });
 
     case 'ping':

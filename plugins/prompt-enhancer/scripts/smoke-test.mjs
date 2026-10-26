@@ -4,17 +4,23 @@
  *  1. MCP path — spawns `node dist/index.js`, performs the initialize
  *     handshake, lists tools and calls enhance_prompt (mock provider).
  *  2. CLI path — pipes JSON into `node dist/cli.js` and checks the
- *     [CONTENT_DELTA] / [ENHANCED] marker protocol.
+ *     [CONTENT_DELTA] / [ENHANCED] marker protocol, plus the empty-draft case.
+ *  3. Consistency — the shipped artifacts agree with package.json: the MCP
+ *     serverInfo version, desktop/system-prompt.generated.js and the overlay
+ *     VERSION stamp must all match the manifest. Catches "edited src, forgot
+ *     npm run build" for the version/generated-file class of drift.
  *
  * Run: npm run smoke
  */
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(root, '..');
+const pkg = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'package.json'), 'utf8'));
 const env = { ...process.env, PROMPT_ENHANCER_PROVIDER: 'mock' };
 
 function fail(message) {
@@ -78,12 +84,13 @@ async function smokeMcp() {
     assert.match(call.content[1].text, /provider=mock/);
 
     console.log('[smoke] MCP path OK (initialize → tools/list → tools/call)');
+    return init.result.serverInfo;
   } finally {
     child.kill();
   }
 }
 
-function runCli() {
+function runCli(payload) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(pluginRoot, 'dist', 'cli.js')], {
       env,
@@ -97,13 +104,13 @@ function runCli() {
     child.on('close', (code) => {
       code === 0 ? resolve(out) : reject(new Error(`cli exited with ${code}`));
     });
-    child.stdin.write(JSON.stringify({ prompt: '重构这段代码' }));
+    child.stdin.write(JSON.stringify(payload));
     child.stdin.end();
   });
 }
 
 async function smokeCli() {
-  const out = await runCli();
+  const out = await runCli({ prompt: '重构这段代码' });
   assert.match(out, /\[CONTENT_DELTA\] "/, 'progressive delta markers present');
   const final = out.match(/\[ENHANCED\](.*)\n/);
   assert.ok(final, 'final [ENHANCED] marker present');
@@ -115,9 +122,44 @@ async function smokeCli() {
   console.log('[smoke] CLI path OK ([CONTENT_DELTA] + [ENHANCED] markers)');
 }
 
+async function smokeCliEmptyDraft() {
+  const out = await runCli({});
+  assert.equal(
+    out.trim(),
+    '[ENHANCED]',
+    'empty draft yields exactly one [ENHANCED] marker (no [ENHANCED_ERROR], no retry)',
+  );
+  console.log('[smoke] CLI empty-draft path OK (single [ENHANCED] marker)');
+}
+
+async function smokeConsistency(serverInfo) {
+  assert.equal(serverInfo.version, pkg.version, 'dist/index.js reports package.json version');
+
+  const { ENHANCE_SYSTEM_PROMPT } = await import(
+    pathToFileURL(path.join(pluginRoot, 'dist', 'core', 'system-prompt.js')).href
+  );
+  const generated = fs.readFileSync(
+    path.join(pluginRoot, 'desktop', 'system-prompt.generated.js'),
+    'utf8',
+  );
+  assert.ok(
+    generated.includes(JSON.stringify(ENHANCE_SYSTEM_PROMPT)),
+    'desktop/system-prompt.generated.js matches dist rules (run npm run build)',
+  );
+
+  const overlay = fs.readFileSync(path.join(pluginRoot, 'desktop', 'overlay.js'), 'utf8');
+  const match = overlay.match(/var VERSION = "([^"]*)";/);
+  assert.ok(match, 'overlay.js carries a VERSION stamp');
+  assert.equal(match[1], pkg.version, 'overlay VERSION matches package.json (run npm run build)');
+
+  console.log(`[smoke] consistency OK (all artifacts report v${pkg.version})`);
+}
+
 try {
-  await smokeMcp();
+  const serverInfo = await smokeMcp();
   await smokeCli();
+  await smokeCliEmptyDraft();
+  await smokeConsistency(serverInfo);
   console.log('[smoke] ALL PASS');
 } catch (error) {
   fail(error instanceof Error ? error.stack ?? error.message : String(error));

@@ -21,6 +21,9 @@
  *   installer.
  * - The archive is rebuilt atomically (temp file + rename) and the patcher
  *   refuses to run while ZCode holds app.asar open (close the app first).
+ *   `--allow-running` skips that check as an escape hatch (e.g. patching a
+ *   COPY of the archive): on Windows the rename usually still fails with EPERM,
+ *   and a running app keeps the old archive until its next restart either way.
  */
 "use strict";
 
@@ -66,6 +69,10 @@ function info(msg) {
   console.log("[zcode-prompt-enhancer] " + msg);
 }
 
+/* Discovery order: ZCODE_ASAR env override wins, then the common install
+ * locations. The D:\ZCode entry is a machine-specific fallback (a portable /
+ * custom-drive install); existence checks are cheap, unknown paths are
+ * skipped. Pass --asar (or set ZCODE_ASAR) on any other layout. */
 function defaultAsarCandidates() {
   const cands = [];
   const push = (p) => { if (p) cands.push(p); };
@@ -337,5 +344,5 @@ switch (cmd) {
     cmdDoctor(opt("--runtime"), opt("--asar"));
     break;
   default:
-    fail("usage: node patch-desktop.mjs <install|remove|check|doctor> [--asar <app.asar>] [--runtime <dir>] [--purge] [--reset-config] [--allow-running]");
+    fail("usage: node patch-desktop.mjs <install|remove|check|doctor> [--asar <app.asar>] [--runtime <dir>] [--purge] [--reset-config] [--after-exit] [--allow-running (skip the running-app check; see header)]");
 }

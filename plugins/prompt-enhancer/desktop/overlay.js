@@ -16,6 +16,8 @@
  * by host-bridge.js (window.__peHostBridge), never a separate API key.
  */
 (function () {
+  /* VERSION is stamped from package.json by scripts/embed-system-prompt.mjs
+   * during `npm run build` — do not bump it by hand. */
   var VERSION = "0.3.0";  if (window.__peOverlay && window.__peOverlayVersion === VERSION) return;
   if (window.__peDispose) { try { window.__peDispose(); } catch (e) { } }
   window.__peOverlay = true;

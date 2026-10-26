@@ -5,6 +5,7 @@
  * container, wires strategies into the registry, and starts the MCP stdio
  * server. Every module above is constructor-injected and framework-free.
  */
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { resolveConfig } from './config/config.js';
 import { Container, createToken } from './di/container.js';
@@ -36,11 +37,31 @@ export function buildContainer(env = process.env) {
     container.register(Tokens.Enhancer, (c) => new PromptEnhancerService(c.resolve(Tokens.StrategyRegistry), c.resolve(Tokens.Config), logEvent));
     return container;
 }
+/**
+ * Plugin version, read from package.json at runtime so the reported version
+ * can never drift from the manifest. dist/index.js sits one level below the
+ * plugin root; dist-test/src/index.js (test builds) sits two — probe both and
+ * match on the package name to avoid picking up an unrelated ancestor.
+ */
+function pluginVersion() {
+    for (const rel of ['../package.json', '../../package.json']) {
+        try {
+            const pkg = JSON.parse(readFileSync(new URL(rel, import.meta.url), 'utf8'));
+            if (pkg.name === 'zcode-plugin-prompt-enhancer' && typeof pkg.version === 'string') {
+                return pkg.version;
+            }
+        }
+        catch {
+            /* try the next candidate */
+        }
+    }
+    return '0.0.0-unknown';
+}
 function main() {
     const container = buildContainer();
     const enhancer = container.resolve(Tokens.Enhancer);
     process.stderr.write('[prompt-enhancer] MCP stdio server starting\n');
-    runMcpServer({ enhancer });
+    runMcpServer({ enhancer, serverVersion: pluginVersion() });
 }
 // Only auto-start when executed as the MCP entry (`node dist/index.js`);
 // test and CLI imports must not spin up the stdio transport.

@@ -3,7 +3,12 @@ import { ENHANCE_SYSTEM_PROMPT } from '../core/system-prompt.js';
 import { errorResponse, INTERNAL_ERROR, METHOD_NOT_FOUND, response, startStdio, } from './stdio.js';
 const PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'prompt-enhancer';
-const SERVER_VERSION = '0.3.0';
+/**
+ * Version reported in `initialize`. The composition root (index.ts) reads it
+ * from package.json at runtime; this fallback only shows when a caller wires
+ * runMcpServer by hand without passing the version (tests).
+ */
+const SERVER_VERSION_FALLBACK = '0.0.0';
 export const TOOLS = [
     {
         name: 'enhance_prompt',
@@ -60,7 +65,10 @@ export async function handleMessage(msg, deps) {
             return response(msg.id, {
                 protocolVersion: PROTOCOL_VERSION,
                 capabilities: { tools: {} },
-                serverInfo: { name: deps.serverName ?? SERVER_NAME, version: deps.serverVersion ?? SERVER_VERSION },
+                serverInfo: {
+                    name: deps.serverName ?? SERVER_NAME,
+                    version: deps.serverVersion ?? SERVER_VERSION_FALLBACK,
+                },
             });
         case 'ping':
             return response(msg.id, {});

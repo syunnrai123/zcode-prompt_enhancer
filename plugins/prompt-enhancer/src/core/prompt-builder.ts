@@ -126,12 +126,13 @@ export function buildFullPrompt(originalPrompt: string, context?: EditorContext)
 
 /**
  * Cap output tokens by input size. The brevity contract in the system prompt
- * targets ≤1.5x the original length, so the cap only has to cover a lightly
- * polished rewrite of the input itself — sized for a CJK-heavy worst case
- * (~0.7 tokens per character) with a small margin. Capping tight protects
- * against runaway verbose output; generation still stops naturally early.
+ * targets ≤1.5x the original length, so the formula only has to cover a
+ * lightly polished rewrite of the input itself — sized for a CJK-heavy worst
+ * case (~0.7 tokens per character) with generous headroom. The ceiling binds
+ * only for long inputs; generation still stops naturally early, so a higher
+ * cap cannot inflate short-prompt output.
  */
 export function computeMaxTokens(promptLength: number): number {
   const len = Number.isFinite(promptLength) && promptLength > 0 ? Math.ceil(promptLength) : 0;
-  return Math.min(4096, Math.max(1024, Math.ceil(len * 0.8)));
+  return Math.min(8192, Math.max(1024, Math.ceil(len * 0.8)));
 }

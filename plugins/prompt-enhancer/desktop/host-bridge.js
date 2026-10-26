@@ -27,9 +27,11 @@
     return prompt;
   }
 
+  /* Mirrors computeMaxTokens in src/core/prompt-builder.ts — keep the two in
+   * sync (floor 1024, 0.8 chars→tokens, ceiling 8192). */
   function maxTokensFor(text) {
     var len = Number.isFinite(text.length) && text.length > 0 ? Math.ceil(text.length) : 0;
-    return Math.min(4096, Math.max(1024, Math.ceil(len * 0.8)));
+    return Math.min(8192, Math.max(1024, Math.ceil(len * 0.8)));
   }
 
   function operationId() {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { EnhancerError } from '../src/core/types.js';
 import { OpenAiCompatibleStrategy } from '../src/strategies/openai-compatible.js';
 import { resolveConfig } from '../src/config/config.js';
 import type { EnhancerConfig } from '../src/core/types.js';
@@ -12,6 +13,8 @@ const CONFIG: EnhancerConfig = resolveConfig({
   PROMPT_ENHANCER_MODEL: 'test-model',
   PROMPT_ENHANCER_TIMEOUT_SECONDS: '20',
 });
+
+const SHORT_TIMEOUT_CONFIG: EnhancerConfig = { ...CONFIG, timeoutMs: 60 };
 
 function sseResponse(chunks: string[], status = 200): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -72,5 +75,37 @@ describe('OpenAiCompatibleStrategy', () => {
       fetchImpl: (async () => sseResponse(['nope'], 401)) as typeof fetch,
     });
     await assert.rejects(() => strategy.enhance({ prompt: 'p' }, CONFIG), /HTTP 401/);
+  });
+
+  it('times out a stalled stream without retrying (wall-clock budget)', async () => {
+    let attempts = 0;
+    const strategy = new OpenAiCompatibleStrategy({
+      id: 'glm',
+      // Headers arrive, then the body stalls until the abort signal fires —
+      // a stub Response is not wired to the signal, so it reacts explicitly.
+      fetchImpl: (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        attempts += 1;
+        let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+        const stream = new ReadableStream<Uint8Array>({
+          start(c) {
+            streamController = c;
+          },
+        });
+        init?.signal?.addEventListener('abort', () => {
+          streamController?.error(new Error('The operation was aborted.'));
+        });
+        return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+      }) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () => strategy.enhance({ prompt: 'p' }, SHORT_TIMEOUT_CONFIG),
+      (error: unknown) => {
+        assert.ok(error instanceof EnhancerError);
+        assert.equal(error.code, 'PROVIDER_TIMEOUT');
+        return true;
+      },
+    );
+    assert.equal(attempts, 1, 'a timeout must not be retried');
   });
 });

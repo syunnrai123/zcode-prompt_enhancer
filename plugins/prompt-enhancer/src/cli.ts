@@ -75,6 +75,7 @@ async function main(): Promise<void> {
     if (!prompt.trim()) {
       process.stdout.write('[ENHANCED]\n');
       flushExit(0);
+      return;
     }
 
     const container = buildContainer();

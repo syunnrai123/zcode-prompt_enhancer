@@ -16,9 +16,10 @@ export declare function truncateText(text: string, maxLength: number, fromEnd?: 
 export declare function buildFullPrompt(originalPrompt: string, context?: EditorContext): string;
 /**
  * Cap output tokens by input size. The brevity contract in the system prompt
- * targets ≤1.5x the original length, so the cap only has to cover a lightly
- * polished rewrite of the input itself — sized for a CJK-heavy worst case
- * (~0.7 tokens per character) with a small margin. Capping tight protects
- * against runaway verbose output; generation still stops naturally early.
+ * targets ≤1.5x the original length, so the formula only has to cover a
+ * lightly polished rewrite of the input itself — sized for a CJK-heavy worst
+ * case (~0.7 tokens per character) with generous headroom. The ceiling binds
+ * only for long inputs; generation still stops naturally early, so a higher
+ * cap cannot inflate short-prompt output.
  */
 export declare function computeMaxTokens(promptLength: number): number;
