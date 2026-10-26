@@ -100,21 +100,27 @@ export function buildInjectLine(loaderAbsPath) {
 }
 
 /**
- * Rewrite the archive with `newEntryText` replacing `entryPath`. Streams every
- * packed file in offset order, recomputes shifted offsets, serializes a fresh
- * header, and atomically renames over the original. Closes the parsed fd.
+ * Rewrite the archive with one or more entries replaced. Streams every packed
+ * file in offset order, recomputes shifted offsets, serializes a fresh header,
+ * and atomically renames over the original. Closes the parsed fd.
  */
 export function writeArchive(asarPath, parsed, entryPath, newEntryText) {
+  return writeArchiveEntries(asarPath, parsed, new Map([[entryPath, newEntryText]]));
+}
+
+export function writeArchiveEntries(asarPath, parsed, replacements) {
   let fd = parsed.fd;
   const { header, dataStart } = parsed;
   try {
     const files = packedFiles(header, dataStart);
-    const entry = files.find((f) => f.path === entryPath);
-    if (!entry) throw new Error(`entry ${entryPath} not found in archive`);
-
-    const oldSize = entry.size;
-    const newBuf = Buffer.from(newEntryText, "utf8");
-    entry.node.size = newBuf.length;
+    const encoded = new Map();
+    for (const [entryPath, text] of replacements) {
+      const entry = files.find((f) => f.path === entryPath);
+      if (!entry) throw new Error(`entry ${entryPath} not found in archive`);
+      const buffer = Buffer.from(text, "utf8");
+      encoded.set(entry, buffer);
+      entry.node.size = buffer.length;
+    }
 
     // Header length depends on the offset digits, and offsets depend on the
     // header length — iterate until both are stable (converges in 1-2 passes).
@@ -129,7 +135,7 @@ export function writeArchive(asarPath, parsed, entryPath, newEntryText) {
       headerLen = next;
       let cursor = headerLen;
       for (const f of files) {
-        const size = f === entry ? newBuf.length : f.size;
+        const size = encoded.get(f)?.length ?? f.size;
         f.node.offset = String(cursor - headerLen);
         cursor += size;
       }
@@ -154,9 +160,10 @@ export function writeArchive(asarPath, parsed, entryPath, newEntryText) {
       const block = 4 * 1024 * 1024;
       const buf = Buffer.alloc(block);
       for (const f of files) {
-        if (f === entry) {
-          fs.writeSync(out, newBuf);
-          cursor += newBuf.length;
+        const replacement = encoded.get(f);
+        if (replacement) {
+          fs.writeSync(out, replacement);
+          cursor += replacement.length;
         } else {
           let remaining = f.size;
           let pos = f.offset;
@@ -178,7 +185,7 @@ export function writeArchive(asarPath, parsed, entryPath, newEntryText) {
     fs.closeSync(fd);
     fd = null;
     fs.renameSync(tmpPath, asarPath);
-    return { oldSize, newSize: newBuf.length };
+    return { changed: [...encoded.keys()].map((f) => f.path) };
   } finally {
     try { if (fd !== null) fs.closeSync(fd); } catch (_) { }
   }

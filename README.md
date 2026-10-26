@@ -19,17 +19,22 @@ ZCode 提示词增强插件。仓库根目录本身即插件市场(Git 源只识
 
 2. 添加后在 **个人 → zcode-prompt-enhancer** 找到 "Prompt Enhancer" 安装。
 
-3. (可选,推荐)启用输入框按钮:完全退出 ZCode(含托盘)后,**双击**
-   `plugins\prompt-enhancer\desktop\install.cmd`,或执行:
+3. 启用输入框按钮：**市场安装只安装命令/MCP，不会自动启用桌面按钮**。
+   双击 `plugins\prompt-enhancer\desktop\install.cmd`，再完全退出 ZCode（含托盘）；
+   安装器会等待退出后自动安装。也可在当前会话运行：
 
    ```
    cd /d E:\JSProjects\zcode-plugin-prompt-enhancer\plugins\prompt-enhancer
-   node desktop\patch-desktop.mjs install
+   node desktop\patch-desktop.mjs install --after-exit
    ```
 
-   已从插件市场安装时无需 npm install/build,`dist/` 已随插件分发。
-   重启 ZCode,输入框工具行出现 ✦ 按钮。配置文件在
-   `%USERPROFILE%\.zcode\zcode-prompt-enhancer\config.json`(provider / api_key)。
+   后台安装不会强制关闭或重启 ZCode，等待期间不会改写 `app.asar`。
+   已从插件市场安装时无需 npm install/build，`dist/` 已随插件分发。
+   安装结束后启动 ZCode，模型和上下文容量左边会出现 **✦ 增强**，生成时显示 **■ 停止**。
+   官方的圆圈不是增强按钮。
+
+4. 配置（可选）：输入栏增强直接复用**当前会话模型**，无需任何 Key。仅 `/enhance-prompt` 命令和 MCP 工具在需要独立服务时才配置 provider / API Key。
+   `node desktop\patch-desktop.mjs doctor` 可查看 main/host 注入状态与运行时版本。
 
 ## 卸载还原官方状态
 

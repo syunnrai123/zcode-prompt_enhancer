@@ -10,18 +10,19 @@
  *     and only replaces the input draft when the user confirms.
  *   - apply ("使用增强结果") / revert ("恢复原稿") via the composer's built-in
  *     E2E lexical bridge (__zcodeLexicalInputE2E), cancel while generating,
- *     and a bridge watchdog so the UI can never spin forever silently.
+ *     and a watchdog so the UI can never spin forever silently.
  *
- * All colors/fonts come from the app's CSS custom properties. Communication
- * with the main process: requests via polled window globals, responses via
- * __peDeliver, liveness via the loader-stamped __peBridgeTs heartbeat.
+ * Generation uses the current session model through the Host service exposed
+ * by host-bridge.js (window.__peHostBridge), never a separate API key.
  */
 (function () {
-  if (window.__peOverlay) return;
-  window.__peOverlay = true;
+  var VERSION = "0.3.0";  if (window.__peOverlay && window.__peOverlayVersion === VERSION) return;
   if (window.__peDispose) { try { window.__peDispose(); } catch (e) { } }
+  window.__peOverlay = true;
+  window.__peOverlayVersion = VERSION;
   var MY_GEN = (window.__peGen = (window.__peGen || 0) + 1);
-  function stale() { return MY_GEN !== window.__peGen; }
+  var disposed = false;
+  function stale() { return disposed || MY_GEN !== window.__peGen; }
 
   var ZH = /^zh/i.test(String(document.documentElement.lang || navigator.language || "zh"));
   function L(zh, en) { return ZH ? zh : en; }
@@ -37,40 +38,24 @@
   ].join(", ");
   var CUA_BTN_SEL = '[data-testid="v4-composer-cua-entry"]';
 
-  var BRIDGE_STALE_MS = 3000;  // loader heartbeat older than this = bridge down
-  var HARD_TIMEOUT_MS = 90000; // overlay-side cap: never spin forever
+  var HARD_TIMEOUT_MS = 120000;
 
-  /* ---------- channel ---------- */
+  /* ---------- host generation bridge ---------- */
 
-  var routes = {}; // request id -> {onDelta,onDone,onError}
-  var reqSeq = 0;
-  var activeId = 0;
-
-  window.__peDeliver = function (msg) {
-    var r = routes[msg && msg.id];
-    if (!r) return;
-    if (msg.type === "delta" && r.onDelta) r.onDelta(msg.text || "");
-    else if (msg.type === "done") { delete routes[msg.id]; r.onDone && r.onDone(msg.text || "", msg.ms || 0); }
-    else if (msg.type === "error") { delete routes[msg.id]; r.onError && r.onError(msg.message || "unknown error"); }
-  };
-
-  function bridgeFresh() {
-    var ts = window.__peBridgeTs;
-    return typeof ts === "number" && (Date.now() - ts) < BRIDGE_STALE_MS;
+  function hostBridge() {
+    return window.__peHostBridge || null;
   }
-  function callEnhance(draft, handlers) {
-    var id = ++reqSeq;
-    routes[id] = handlers;
-    activeId = id;
-    window.__peRequest = { id: id, draft: draft };
-    window.__peRequestSeq = id;
+  function hostAvailable(input) {
+    var bridge = hostBridge();
+    if (!bridge) return false;
+    try { return typeof bridge.available === "function" ? bridge.available(input) : false; } catch (e) { return false; }
   }
-  function cancelEnhance() {
-    if (!activeId) return;
-    delete routes[activeId];
-    window.__peCancel = { id: activeId };
-    window.__peCancelSeq = activeId;
-    activeId = 0;
+  function hostUnavailableReason(input) {
+    var bridge = hostBridge();
+    try {
+      if (bridge && typeof bridge.reasonUnavailable === "function") return bridge.reasonUnavailable(input);
+    } catch (e) { }
+    return L("桌面增强桥未就绪，请重新运行 desktop/install.cmd 并重启 ZCode", "Desktop enhancement bridge is not ready; re-run desktop/install.cmd and restart ZCode");
   }
 
   /* ---------- DOM helpers ---------- */
@@ -81,11 +66,18 @@
     if (html !== undefined) n.innerHTML = html;
     return n;
   }
+  function isLive(node) {
+    if (!node || !document.body || !document.body.contains(node)) return false;
+    for (var p = node; p && p !== document.body; p = p.parentElement) {
+      if (p.inert || (p.getAttribute && p.getAttribute("aria-hidden") === "true")) return false;
+    }
+    return true;
+  }
   function toolbarRowOf(card) {
     try {
       var kids = card.children;
-      for (var i = kids.length - 1; i >= 0; i--) {
-        if (String(kids[i].className || "").indexOf("group/toolbar") >= 0) return kids[i];
+      for (var i = 0; i < kids.length; i++) {
+        if (String(kids[i].className || "").indexOf("group/toolbar") >= 0 && isLive(kids[i])) return kids[i];
       }
     } catch (e) { }
     return null;
@@ -115,17 +107,14 @@
     return "default";
   }
 
-  var ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"></path>' +
-    '<path d="M18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"></path></svg>';
-  var SPINNER = '<svg class="pe-spin" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">' +
-    '<path d="M12 3a9 9 0 1 0 9 9"></path></svg>';
+  var LABEL = '<span aria-hidden="true">✦</span><span>' + L("增强", "Enhance") + '</span>';
+  var STOP_LABEL = '<span aria-hidden="true">■</span><span>' + L("停止", "Stop") + '</span>';
 
   /* ---------- styles ---------- */
 
   var STYLE_ID = "pe-overlay-style";
   var CSS = [
-    ".pe-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--color-muted-foreground,#8a8f98);cursor:pointer;transition:background .12s ease,color .12s ease;flex:0 0 auto}",
+    ".pe-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:28px;height:28px;padding:0 7px;border:0;border-radius:8px;background:transparent;color:var(--color-muted-foreground,#8a8f98);cursor:pointer;font:inherit;font-size:12px;white-space:nowrap;flex:0 0 auto}",
     ".pe-btn:hover{background:var(--color-surface-hover,rgba(0,0,0,.06));color:var(--color-foreground,#222)}",
     ".pe-btn:disabled{opacity:.55;cursor:default}",
     ".pe-btn.pe-applied{color:var(--color-success,#3fb950)}",
@@ -154,15 +143,7 @@
 
   var appliedBySession = {}; // sessionKey -> {original, enhanced}
   var ctlByInput = new WeakMap();
-
-  function ensureCtl(input) {
-    var ctl = ctlByInput.get(input);
-    if (ctl && document.body.contains(ctl.btn)) return ctl;
-    if (ctl) { ctl.destroy(); }
-    ctl = createCtl(input);
-    ctlByInput.set(input, ctl);
-    return ctl;
-  }
+  var activeGeneration = null; // only one generation app-wide at a time
 
   function createCtl(input) {
     var card = cardOf(input);
@@ -171,8 +152,14 @@
 
     var state = { busy: false, dirty: false, text: "", original: "" };
     var sessionKey = sessionKeyOf(input);
+    var requestId = 0;
+    var requestContext = null;
+    var tick = null;
+    var destroyed = false;
+    var api = null;
 
-    var btn = el("button", "pe-btn", ICON);
+    var btn = el("button", "pe-btn", LABEL);
+    btn.setAttribute("data-pe-overlay-button", VERSION);
     btn.type = "button";
     btn.title = L("增强提示词", "Enhance prompt");
     btn.setAttribute("aria-label", btn.title);
@@ -209,21 +196,26 @@
     /* Button sits immediately LEFT of the right-hand cluster (model selector,
      * context capacity, send). Falls back to after the CUA tool button. */
     function mount() {
+      var trailing = row.querySelector("[data-composer-trailing-actions]");
       var anchor = null;
-      try {
-        var kids = row.children;
-        for (var i = 0; i < kids.length; i++) {
-          var k = kids[i];
-          if ((k.matches && k.matches(RIGHT_CLUSTER_SEL)) ||
-            (k.querySelector && k.querySelector(RIGHT_CLUSTER_SEL))) { anchor = k; break; }
-        }
-      } catch (e) { }
-      if (anchor && anchor.parentElement === row) {
-        if (btn.nextSibling !== anchor) row.insertBefore(btn, anchor);
+      if (trailing) {
+        if (trailing.children[0] !== btn) trailing.insertBefore(btn, trailing.children[0] || null);
       } else {
-        var cua = row.querySelector(CUA_BTN_SEL);
-        if (cua && cua.parentElement === row && cua.nextSibling !== btn) row.insertBefore(btn, cua.nextSibling);
-        else if (btn.parentElement !== row) row.appendChild(btn);
+        try {
+          var kids = row.children;
+          for (var i = 0; i < kids.length; i++) {
+            var k = kids[i];
+            if (k !== btn && ((k.matches && k.matches(RIGHT_CLUSTER_SEL)) ||
+              (k.querySelector && k.querySelector(RIGHT_CLUSTER_SEL)))) { anchor = k; break; }
+          }
+        } catch (e) { }
+        if (anchor && anchor.parentElement === row) {
+          if (btn.nextSibling !== anchor) row.insertBefore(btn, anchor);
+        } else {
+          var cua = row.querySelector(CUA_BTN_SEL);
+          if (cua && cua.parentElement === row && cua.nextSibling !== btn) row.insertBefore(btn, cua.nextSibling);
+          else if (btn.parentElement !== row) row.appendChild(btn);
+        }
       }
       var ref = row.nextSibling;
       if (ref && ref.parentElement === card && ref !== panel) card.insertBefore(panel, ref);
@@ -244,27 +236,77 @@
       revertBtn.style.display = ap && !state.busy ? "" : "none";
     }
 
+    function currentBinding() {
+      return !destroyed && isLive(input) && sessionKeyOf(input) === sessionKey && cardOf(input) === card && toolbarRowOf(card) === row;
+    }
     function currentDraft() {
-      var api = bridgeOf(input);
+      var api = currentBinding() && bridgeOf(input);
       try { return api ? String(api.getText() || "") : ""; } catch (e) { return ""; }
     }
     function setDraft(text) {
-      var api = bridgeOf(input);
+      var api = currentBinding() && bridgeOf(input);
       if (!api) return false;
       try { api.setText(text); return true; } catch (e) { return false; }
     }
 
+    function modelKey(context) {
+      var selection = context && context.selection;
+      return JSON.stringify([context && context.workspacePath, context && context.workspaceIdentity,
+        context && context.remoteSessionId, context && context.sessionId,
+        selection && selection.providerId, selection && selection.modelId, selection && selection.options]);
+    }
+    function readSessionContext() {
+      if (typeof window.__peGetSessionContext !== "function") throw new Error(L("会话模型桥未就绪，请更新桌面集成并重启 ZCode", "Session model bridge is not ready; update the desktop integration and restart ZCode"));
+      return window.__peGetSessionContext(input);
+    }
+    function followsSelection() {
+      if (!state.busy || !requestContext) return true;
+      try { return modelKey(readSessionContext()) === modelKey(requestContext); } catch (e) { return false; }
+    }
+    function stopForModelChange() {
+      cancel();
+      applyBtn.disabled = true;
+      setStatus(L("会话模型已切换，已停止旧请求；重新生成将使用新模型", "Session model changed; the previous request was stopped. Retry uses the new model"), false);
+    }
     function resetBusyUi() {
+      if (tick !== null) { clearInterval(tick); tick = null; }
       state.busy = false;
-      btn.disabled = false; btn.innerHTML = ICON;
+      requestId = 0;
+      requestContext = null;
+      if (activeGeneration === api) activeGeneration = null;
+      btn.disabled = false; btn.innerHTML = LABEL;
+      btn.removeAttribute("aria-busy");
       cancelBtn.style.display = "none";
       ta.readOnly = false;
       refreshApplied();
+      btn.setAttribute("aria-label", btn.title);
     }
 
     function run() {
+      if (destroyed || stale() || state.busy || !currentBinding()) return;
+      if (!bridgeOf(input)) {
+        setStatus(L("输入框读写桥未就绪，请重启 ZCode；尚未发送请求", "Composer bridge is not ready; restart ZCode. No request was sent"), true);
+        applyBtn.disabled = true; retryBtn.style.display = "";
+        openPanel();
+        return;
+      }
+      var context;
+      try { context = readSessionContext(); }
+      catch (e) {
+        setStatus(String(e && e.message || e), true);
+        applyBtn.disabled = true; retryBtn.style.display = "";
+        openPanel();
+        return;
+      }
+      if (!hostAvailable(input)) {
+        setStatus(hostUnavailableReason(input), true);
+        applyBtn.disabled = true; retryBtn.style.display = "";
+        openPanel();
+        return;
+      }
       var draft = currentDraft();
-      state.original = draft;
+      var applied = appliedBySession[sessionKey];
+      state.original = applied && applied.enhanced === draft ? applied.original : draft;
       if (!draft.trim()) {
         ta.value = ""; state.text = ""; state.dirty = false;
         setStatus(L("输入框为空:请先输入提示词草稿", "Composer is empty: type a draft first"), true);
@@ -273,84 +315,87 @@
         return;
       }
       state.busy = true; state.dirty = false; state.text = "";
+      requestContext = context;
       ta.value = ""; ta.readOnly = true;
-      btn.disabled = false; btn.innerHTML = SPINNER;
+      btn.disabled = false; btn.innerHTML = STOP_LABEL;
+      btn.title = L("停止增强", "Stop enhancement");
+      btn.setAttribute("aria-label", btn.title); btn.setAttribute("aria-busy", "true");
       cancelBtn.style.display = "";
       applyBtn.disabled = true; retryBtn.style.display = "none"; revertBtn.style.display = "none";
-      note.textContent = "";
+      note.textContent = context.selection.providerId + " / " + context.selection.modelId;
       var t0 = Date.now();
-      var warnedBridge = false;
-      setStatus(bridgeFresh()
-        ? L("生成中…", "Generating…")
-        : L("等待主进程桥接…", "Waiting for main-process bridge…"), !bridgeFresh());
+      setStatus(L("使用当前会话模型生成中…", "Generating with the current session model…"), false);
       openPanel();
 
-      var tick = setInterval(function () {
-        if (stale()) { clearInterval(tick); return; }
-        if (!state.busy) { clearInterval(tick); return; }
+      tick = setInterval(function () {
+        if (stale() || !currentBinding()) { cancel(); return; }
+        if (!state.busy) { clearInterval(tick); tick = null; return; }
+        if (!followsSelection()) { stopForModelChange(); return; }
         var secs = ((Date.now() - t0) / 1000).toFixed(1);
-        if (!bridgeFresh()) {
-          warnedBridge = true;
-          setStatus(L("主进程桥接未响应(可点取消;重启 ZCode 可修复)", "Main-process bridge not responding (cancel; restarting ZCode fixes it)"), true);
-        } else {
-          setStatus(L("生成中…", "Generating…") + " " + secs + "s", false);
-        }
+        setStatus(L("使用当前会话模型生成中…", "Generating with the current session model…") + " " + secs + "s", false);
         if (Date.now() - t0 > HARD_TIMEOUT_MS) {
-          clearInterval(tick);
-          cancelEnhance();
-          resetBusyUi();
+          cancel();
           applyBtn.disabled = !ta.value.trim();
           retryBtn.style.display = "";
-          setStatus(L("超时未收到响应,已自动取消", "Timed out with no response; cancelled"), true);
+          setStatus(L("超时未收到响应，已自动取消", "Timed out with no response; cancelled"), true);
         }
       }, 200);
 
-      callEnhance(draft, {
-        onDelta: function (chunk) {
-          if (stale()) return;
-          state.text += chunk;
-          if (!state.dirty) ta.value = state.text;
-        },
-        onDone: function (finalText, ms) {
-          if (stale()) return;
-          clearInterval(tick);
-          state.text = finalText || state.text;
-          if (!state.dirty) ta.value = state.text;
-          resetBusyUi();
-          applyBtn.disabled = !ta.value.trim();
-          retryBtn.style.display = "";
-          setStatus(L("已生成", "Ready") + " · " + (ms / 1000).toFixed(1) + "s", false);
-          note.textContent = L("确认后才会替换输入框内容", "The composer is replaced only after you confirm");
-        },
-        onError: function (message) {
-          if (stale()) return;
-          clearInterval(tick);
-          resetBusyUi();
-          applyBtn.disabled = true;
-          retryBtn.style.display = "";
-          setStatus(message, true);
-        }
+      if (activeGeneration && activeGeneration !== api) activeGeneration.cancelForNewRun();
+      activeGeneration = api;
+      requestId = requestId + 1;
+      var myId = requestId;
+      var bridge = hostBridge();
+      bridge.generate(input, draft, context).then(function (result) {
+        if (stale() || !currentBinding() || myId !== requestId) return;
+        if (!followsSelection()) { stopForModelChange(); return; }
+        clearInterval(tick);
+        state.text = result.text || "";
+        if (!state.dirty) ta.value = state.text;
+        resetBusyUi();
+        applyBtn.disabled = !ta.value.trim();
+        retryBtn.style.display = "";
+        setStatus(L("已生成", "Ready") + " · " + ((Date.now() - t0) / 1000).toFixed(1) + "s", false);
+        note.textContent = L("确认后才会替换输入框内容", "The composer is replaced only after you confirm");
+      }, function (error) {
+        if (stale() || !currentBinding() || myId !== requestId) return;
+        clearInterval(tick);
+        resetBusyUi();
+        applyBtn.disabled = true;
+        retryBtn.style.display = "";
+        setStatus(String(error && error.message || error), true);
       });
     }
 
     function cancel() {
       if (!state.busy) return;
-      cancelEnhance();
-      state.busy = false;
-      btn.disabled = false; btn.innerHTML = ICON;
-      cancelBtn.style.display = "none";
-      ta.readOnly = false;
+      var bridge = hostBridge();
+      if (bridge && typeof bridge.cancel === "function") { try { bridge.cancel(); } catch (e) { } }
+      resetBusyUi();
       applyBtn.disabled = !ta.value.trim();
       retryBtn.style.display = "";
-      refreshApplied();
       setStatus(L("已取消", "Cancelled"), false);
     }
 
     btn.addEventListener("click", function (e) {
       e.preventDefault(); e.stopPropagation();
-      if (state.busy) { cancel(); return; } // click again to cancel
-      if (panel.style.display === "none") { refreshApplied(); run(); }
-      else closePanel();
+      if (state.busy) { cancel(); return; }
+      if (panel.style.display !== "none") { closePanel(); return; }
+      var applied = appliedBySession[sessionKey];
+      if (applied) {
+        state.original = applied.original;
+        if (!ta.value.trim()) {
+          state.text = applied.enhanced;
+          ta.value = applied.enhanced;
+        }
+        applyBtn.disabled = !ta.value.trim();
+        retryBtn.style.display = "";
+        refreshApplied();
+        setStatus(L("已替换输入框草稿", "Composer draft replaced"), false);
+        note.textContent = L("可随时点「恢复原稿」撤回", "「Restore draft」 reverts anytime");
+        openPanel();
+      } else if (ta.value.trim()) { refreshApplied(); openPanel(); }
+      else run();
     });
     cancelBtn.addEventListener("click", cancel);
     x.addEventListener("click", function () { if (state.busy) cancel(); closePanel(); });
@@ -385,18 +430,20 @@
     mount();
     refreshApplied();
 
-    return {
+    api = {
+      input: input,
       btn: btn,
       panel: panel,
-      rescan: function () {
-        if (!document.body.contains(btn) || !document.body.contains(panel)) {
-          try { mount(); } catch (e) { }
-        }
-      },
+      valid: currentBinding,
+      rescan: mount,
+      cancelForNewRun: function () { cancel(); },
       destroy: function () {
+        cancel(); destroyed = true;
+        if (tick !== null) { clearInterval(tick); tick = null; }
         try { btn.remove(); panel.remove(); } catch (e) { }
       }
     };
+    return api;
   }
 
   /* ---------- coordinator ---------- */
@@ -411,12 +458,14 @@
   function sweep() {
     if (stale()) return;
     var inputs = [];
-    try { inputs = Array.prototype.slice.call(document.querySelectorAll(INPUT_SEL)); } catch (e) { }
-    ctls = ctls.filter(function (ctl) { return ctl && document.body.contains(ctl.btn); });
+    try { inputs = Array.prototype.slice.call(document.querySelectorAll(INPUT_SEL)).filter(isLive); } catch (e) { }
+    ctls = ctls.filter(function (ctl) {
+      if (inputs.indexOf(ctl.input) >= 0 && ctl.valid()) return true;
+      ctl.destroy(); ctlByInput.delete(ctl.input); return false;
+    });
     inputs.forEach(function (input) {
       var ctl = ctlByInput.get(input);
-      if (ctl && document.body.contains(ctl.btn)) { ctl.rescan(); return; }
-      if (ctl) ctl.destroy();
+      if (ctl) { ctl.rescan(); return; }
       var fresh = createCtl(input);
       if (fresh) { ctlByInput.set(input, fresh); ctls.push(fresh); }
     });
@@ -428,9 +477,12 @@
   }, 800);
 
   window.__peDispose = function () {
+    if (disposed) return;
     clearInterval(scanTimer);
     ctls.forEach(function (ctl) { try { ctl && ctl.destroy(); } catch (e) { } });
     ctls = [];
+    disposed = true;
+    window.__peOverlay = false;
     var s = document.getElementById(STYLE_ID); if (s) s.remove();
   };
 })();

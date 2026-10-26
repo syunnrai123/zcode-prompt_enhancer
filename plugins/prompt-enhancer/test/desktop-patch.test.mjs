@@ -119,10 +119,10 @@ test.after(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-test("loader deliver() passes an object, not a double-encoded string", () => {
-  const src = fs.readFileSync(path.join(HERE, "..", "desktop", "inject-main.cjs"), "utf8");
-  // Regression: JSON.stringify(JSON.stringify(msg)) makes __peDeliver receive a
-  // string; every response is then dropped silently and the UI spins forever.
-  assert.ok(!/JSON\.stringify\(JSON\.stringify\(/.test(src), "double JSON encoding reintroduced");
-  assert.match(src, /window\.__peDeliver\(.*JSON\.stringify\(msg\)/);
+test("loader injects every renderer script and never spawns a CLI process", () => {
+  const loader = fs.readFileSync(path.join(HERE, "..", "desktop", "inject-main.cjs"), "utf8");
+  for (const name of ["system-prompt.generated.js", "session-context.js", "host-bridge.js", "overlay.js"]) {
+    assert.ok(loader.includes(JSON.stringify(name)), `${name} must be injected`);
+  }
+  assert.ok(!/spawn\(|child_process/.test(loader), "generation must not spawn a CLI child");
 });

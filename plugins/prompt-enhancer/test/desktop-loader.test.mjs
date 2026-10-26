@@ -1,10 +1,8 @@
 /**
- * Loader end-to-end test: drives inject-main.cjs with a stub `electron` module
- * physically resolvable from the temp runtime directory (same mechanism Node
- * uses for the real app), verifying the full bridge:
- *   renderer publishes __peRequest -> loader polls -> spawns dist/cli.js
- *   (mock provider) -> streamed deltas + [ENHANCED] arrive via __peDeliver
- *   as OBJECTS -> cancel kills the child.
+ * Loader test: drives inject-main.cjs with a stub `electron` module and
+ * verifies the renderer script bundle is injected in dependency order, on
+ * first attach and again after navigation, and that a missing script is
+ * reported without injecting partial code.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -16,6 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.join(HERE, "..");
+const SCRIPTS = ["system-prompt.generated.js", "session-context.js", "host-bridge.js", "overlay.js"];
 
 function makeRuntime() {
   const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pe-loader-"));
@@ -24,16 +23,9 @@ function makeRuntime() {
     path.join(PLUGIN_ROOT, "desktop", "inject-main.cjs"),
     path.join(runtimeDir, "desktop", "inject-main.cjs")
   );
-  fs.copyFileSync(
-    path.join(PLUGIN_ROOT, "desktop", "overlay.js"),
-    path.join(runtimeDir, "desktop", "overlay.js")
-  );
-  fs.cpSync(path.join(PLUGIN_ROOT, "dist"), path.join(runtimeDir, "desktop", "dist"), { recursive: true });
-  fs.writeFileSync(
-    path.join(runtimeDir, "desktop", "config.json"),
-    JSON.stringify({ provider: "mock", api_key: "", timeout_seconds: "20" })
-  );
-
+  for (const name of SCRIPTS) {
+    fs.copyFileSync(path.join(PLUGIN_ROOT, "desktop", name), path.join(runtimeDir, "desktop", name));
+  }
   const stubDir = path.join(runtimeDir, "node_modules", "electron");
   fs.mkdirSync(stubDir, { recursive: true });
   fs.writeFileSync(
@@ -44,29 +36,15 @@ function makeRuntime() {
     path.join(stubDir, "index.js"),
     `"use strict";
 const hook = globalThis.__PE_TEST_HOOK;
-const makeWc = (id) => ({
-  id,
-  on() {},
-  isDestroyed: () => hook.state.destroyed,
-  executeJavaScript(code) {
-    if (code.includes("__peBridgeTs=Date.now()")) {
-      return Promise.resolve(JSON.stringify([hook.state.reqSeq, hook.state.cancelSeq]));
-    }
-    if (code.includes("var r=window.__peRequest;window.__peRequest=null;")) {
-      const r = hook.state.request;
-      hook.state.request = null;
-      return Promise.resolve(r ? JSON.stringify(r) : null);
-    }
-    if (code.includes("__peDeliver")) {
-      const idx = code.lastIndexOf("__peDeliver(");
-      const arg = code.slice(idx + "__peDeliver(".length, code.lastIndexOf(")"));
-      try { hook.deliveries.push(new Function("return (" + arg + ")")()); } catch (e) { hook.deliveries.push({ parseError: String(e) }); }
-      return Promise.resolve(true);
-    }
-    return Promise.resolve(undefined);
-  },
-});
-const wc = makeWc(7);
+const listeners = {};
+const wc = {
+  id: 7,
+  on(name, fn) { (listeners[name] ||= []).push(fn); },
+  isDestroyed: () => false,
+  executeJavaScript(code) { hook.injected.push(code); return Promise.resolve(true); },
+  fire(name) { for (const fn of listeners[name] || []) fn(); },
+};
+globalThis.__PE_TEST_WC = wc;
 module.exports = {
   app: { on() {}, whenReady: () => Promise.resolve() },
   BrowserWindow: { getAllWindows: () => [{ webContents: wc }] },
@@ -76,65 +54,49 @@ module.exports = {
   return { runtimeDir };
 }
 
-test("loader bridges a request and delivers object payloads", async (t) => {
+test("injects every renderer script in order and re-injects after navigation", async (t) => {
   const { runtimeDir } = makeRuntime();
-  const hook = { deliveries: [], state: { reqSeq: 0, cancelSeq: 0, request: null, destroyed: false } };
+  const hook = { injected: [] };
   globalThis.__PE_TEST_HOOK = hook;
 
   const require = createRequire(path.join(runtimeDir, "desktop", "x.cjs"));
-  const loaderPath = path.join(runtimeDir, "desktop", "inject-main.cjs");
-  require(loaderPath);
+  require(path.join(runtimeDir, "desktop", "inject-main.cjs"));
+  await new Promise((resolve) => setTimeout(resolve, 100));
 
   t.after(() => {
     delete globalThis.__PE_TEST_HOOK;
+    delete globalThis.__PE_TEST_WC;
     try { fs.rmSync(runtimeDir, { recursive: true, force: true }); } catch (e) { }
   });
 
-  hook.state.request = { id: 1, draft: "优化下这段代码" };
-  hook.state.reqSeq = 1;
+  assert.equal(hook.injected.length, 1, "one batched injection");
+  const code = hook.injected[0];
+  const markers = ["__PE_SYSTEM_PROMPT", "__peGetSessionContext", "__peHostBridge", "pe-overlay-style"];
+  for (const marker of markers) assert.ok(code.includes(marker), marker + " content missing");
+  const order = markers.map((marker) => code.indexOf(marker));
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), "scripts must load in dependency order");
 
-  const deadline = Date.now() + 20000;
-  while (Date.now() < deadline && !hook.deliveries.some((d) => d && d.type === "done")) {
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  const done = hook.deliveries.find((d) => d && d.type === "done");
-  assert.ok(done, "expected a done delivery; got: " + JSON.stringify(hook.deliveries.map((d) => d && d.type)));
-  assert.equal(typeof done, "object", "delivery must be an object, not a string");
-  assert.equal(done.id, 1);
-  assert.match(done.text, /mock-enhanced/);
-  assert.ok(hook.deliveries.some((d) => d && d.type === "delta"), "expected streamed deltas");
+  globalThis.__PE_TEST_WC.fire("did-finish-load");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(hook.injected.length, 2, "navigation re-injects");
 });
 
-test("missing API key fails fast with an actionable message", async (t) => {
+test("missing script reports through loader.log and does not inject partial code", async (t) => {
   const { runtimeDir } = makeRuntime();
-  fs.writeFileSync(path.join(runtimeDir, "desktop", "config.json"), JSON.stringify({ provider: "glm", api_key: "" }));
-  const hook = { deliveries: [], state: { reqSeq: 0, cancelSeq: 0, request: null, destroyed: false } };
-  globalThis.__PE_TEST_HOOK = hook;
-  // Run in a child process: the loader guards itself with a process-wide flag,
-  // so a second in-process load would be a no-op after the first test.
+  fs.rmSync(path.join(runtimeDir, "desktop", "host-bridge.js"));
   const driver = path.join(runtimeDir, "driver.cjs");
-  fs.writeFileSync(driver,
-    `globalThis.__PE_TEST_HOOK = { deliveries: [], state: { reqSeq: 1, cancelSeq: 0, ` +
-    `request: { id: 2, draft: "hello" }, destroyed: false } };\n` +
+  fs.writeFileSync(
+    driver,
+    `globalThis.__PE_TEST_HOOK = { injected: [] };\n` +
     `require(${JSON.stringify(path.join(runtimeDir, "desktop", "inject-main.cjs"))});\n` +
-    `setTimeout(() => { console.log("RESULT:" + JSON.stringify(globalThis.__PE_TEST_HOOK.deliveries)); process.exit(0); }, 1500);\n`
+    `setTimeout(() => process.exit(0), 200);\n`
   );
   const { execFileSync } = await import("node:child_process");
-  let output = "";
-  try {
-    output = execFileSync(process.execPath, [driver], { encoding: "utf8", timeout: 20000 });
-  } catch (e) {
-    output = String(e.stdout || "");
-  }
+  execFileSync(process.execPath, [driver], { stdio: "pipe", timeout: 20000 });
   t.after(() => {
-    delete globalThis.__PE_TEST_HOOK;
     try { fs.rmSync(runtimeDir, { recursive: true, force: true }); } catch (e) { }
   });
-
-  const line = output.split("\n").find((l) => l.startsWith("RESULT:"));
-  assert.ok(line, "driver produced no result; output=" + output.slice(0, 500));
-  const deliveries = JSON.parse(line.slice("RESULT:".length));
-  const err = deliveries.find((d) => d && d.type === "error");
-  assert.ok(err, "expected a fast error delivery; got: " + JSON.stringify(deliveries.map((d) => d && d.type)));
-  assert.match(err.message, /API Key/);
+  const log = fs.readFileSync(path.join(runtimeDir, "desktop", "loader.log"), "utf8");
+  assert.match(log, /script unavailable: host-bridge\.js/);
+  assert.doesNotMatch(log, /scripts injected/);
 });

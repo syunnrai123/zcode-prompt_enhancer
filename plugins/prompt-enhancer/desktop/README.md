@@ -1,59 +1,67 @@
-# 桌面输入框增强按钮(desktop 集成层)
+# 桌面输入框增强按钮（desktop 集成层）
 
-在 ZCode 桌面端输入框工具行注入一个 **✦ 增强按钮**:点击后读取当前草稿,调用增强管线,
-在输入框卡片内的**独立预览面板**里流式展示结果;用户点「使用增强结果」才会替换输入框草稿,
-之后可随时点「恢复原稿」回退。全程不改 ZCode 官方代码,只向 `app.asar` 的
-`out/main/index.js` 尾部追加**一行**动态 import。
+在 ZCode 桌面端输入框工具行注入一个 **✦ 增强按钮**：点击后读取当前草稿，直接用**当前会话选中的模型**
+生成增强结果，在输入框卡片内的**独立预览面板**中展示；点「使用增强结果」才会替换草稿，
+随后可随时「恢复原稿」。**不需要单独的 provider / API Key**——凭据由 ZCode Host 自己持有。
+
+补丁完全可逆：
+
+- `out/main/index.js` 尾部追加**一行**动态 import（注入 UI）。
+- `out/host/index.js` 的 zcode-agent 服务注册处包一层可逆 wrapper（暴露
+  `__peGenerateWorkspaceText` / `__peCancelWorkspaceText`，其余方法原样转发）。
+- `remove` 把两处恢复为官方内容（回环测试按字节验证），`--purge` 再删运行时目录。
 
 ## 组成
 
 | 文件 | 运行位置 | 职责 |
 | --- | --- | --- |
-| `inject-main.cjs` | 主进程 | 向每个窗口注入 overlay;轮询渲染进程的增强请求,以 `ELECTRON_RUN_AS_NODE=1` 拉起 `dist/cli.js`,把 `[CONTENT_DELTA]` 流回预览面板 |
-| `overlay.js` | 渲染进程 | 找到输入框(`data-testid="v4-composer-input"`)与工具行(`group/toolbar`),挂按钮与预览面板;用官方 `__zcodeLexicalInputE2E` 桥读写草稿;主题全部跟随 `--color-*` 变量 |
-| `patch-desktop.mjs` | Node CLI | `install` / `remove` / `check` / `doctor`,纯 Node 实现 asar 读写,原子替换,幂等 |
-| `install.cmd` / `uninstall.cmd` | Windows | 双击安装/卸载(自动 `cd /d`,无需手敲命令) |
-| `asar-lib.mjs` | — | asar 头解析/重写原语,与回环测试共享 |
-| `config.example.json` | — | 运行时配置模板(provider/api_key 等) |
+| `inject-main.cjs` | 主进程 | 向每个渲染窗口按依赖顺序注入下列四个脚本，记录 `loader.log` |
+| `system-prompt.generated.js` | 渲染进程 | 由 `scripts/embed-system-prompt.mjs` 生成的唯一权威增强规则 |
+| `session-context.js` | 渲染进程 | 读取已提交 composer 的当前模型选择与工作区路由（`v4-model-config` + React fiber） |
+| `host-bridge.js` | 渲染进程 | 通过 Host 的 `zcodeAgentService.__peGenerateWorkspaceText` 用当前会话模型生成；`__peCancelWorkspaceText` 真实中止 |
+| `overlay.js` | 渲染进程 | 工具行 ✦/■ 按钮、预览面板、应用/恢复/取消；模型切换自动停止旧请求 |
+| `host-patch.mjs` | — | Host bundle 可逆补丁的 apply/strip/检测 |
+| `patch-desktop.mjs` | Node CLI | `install` / `remove` / `check` / `doctor`，纯 Node 实现 asar 双入口读写，原子替换，幂等 |
+| `install.cmd` / `uninstall.cmd` | Windows | 双击安装/卸载（自动 `cd /d`，安装器等待 ZCode 退出） |
+| `asar-lib.mjs` | — | asar 头解析/重写原语，与回环测试共享 |
 
-## 安装(需本机有 Node ≥ 18,且 ZCode 已完全退出)
+## 安装（本机需有 Node ≥ 18）
 
-> 已从插件市场安装的用户,`dist/` 已随插件分发,无需 npm install / build,直接双击
-> `desktop\install.cmd` 即可(等价于下面的 `node desktop/patch-desktop.mjs install`)。
-> Windows 的 `cmd` 里 `cd` 不切换盘符,请务必先 `cd /d` 或直接双击脚本。
+> **插件市场安装 ≠ 桌面按钮已启用。** 市场只安装命令/MCP；按钮还需要下面的桌面集成步骤。
+> 双击 `desktop\install.cmd` 后，安装器会等待所有 ZCode 进程退出再写入；不会强制关闭应用。
+> 已从市场安装时脚本已随插件分发，无需 npm install / build。
+> Windows 的 `cmd` 里 `cd` 不切换盘符，请使用 `cd /d` 或直接双击脚本。
 
-从源码安装时:
+也可以在 ZCode 仍运行时提交后台安装：
+
+```bash
+node desktop\patch-desktop.mjs install --after-exit
+```
+
+此命令立即返回；后台进程等待 ZCode 完全退出（含托盘）后安装，完成后手动启动 ZCode。
+等待期间不会写入 `app.asar`。状态写入运行目录 `install-status.json`，日志在 `install.log`。
+官方更新覆盖集成后需再次安装。
+
+从源码安装：
 
 ```bash
 cd /d E:\JSProjects\zcode-plugin-prompt-enhancer\plugins\prompt-enhancer
-npm install && npm run build
-node desktop\patch-desktop.mjs install            # 自动探测 app.asar;也可 --asar <路径>
+npm install && npm run build          # build 会同时生成 system-prompt.generated.js
+node desktop\patch-desktop.mjs install            # 自动探测 app.asar；也可 --asar <路径>
 ```
 
-或直接双击 `desktop\install.cmd`。安装器会把 loader、overlay 与 `dist/` 复制到自包含的运行时目录
-`~/.zcode/zcode-prompt-enhancer/`(与 ZCode 插件缓存解耦,插件更新不影响按钮),
-并在该目录的 `config.json` 里保留/合并你的配置:
-
-```json
-{ "provider": "", "api_key": "", "base_url": "", "model": "", "timeout_seconds": "45", "lang": "zh" }
-```
-
-- `provider` 留空时自动探测环境变量密钥(`ZAI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`);
-  也可直接填 `glm` / `openai-compatible` / `anthropic` / `mock`。
-- **也可以直接复用插件设置**:ZCode **设置 → 插件 → 提示词增强器** 里填写的 provider / API Key
-  会自动被按钮读取(存于 `~/.zcode/cli/config.json` 的 `plugins.options`),无需重复配置。
-- 未配置密钥时点击按钮会**立即**弹出明确错误(不会一直转圈);`/enhance-prompt` 命令路径仍可就地增强。
-
-重启 ZCode 后,输入框工具行会出现 ✦ 按钮(位于**模型选择/上下文容量控件的左侧**)。
+安装器把上述脚本复制到自包含运行时目录 `~/.zcode/zcode-prompt-enhancer/`（与插件缓存解耦）。
+`/enhance-prompt` 命令与 MCP 工具仍可选用外部 provider（`config.json` 或插件设置），与按钮无关。
 
 ## 使用流程
 
-1. 在输入框写草稿 → 点 ✦:面板打开,流式生成增强结果(可随时直接修改文本)。
-2. 生成中可点 **取消**(或再点一次 ✦、按 Esc)立即停止,进程会被杀掉。
-3. 满意 → 「使用增强结果」:草稿被替换(按钮变绿,面板提示可回退)。
-4. 反悔 → 「恢复原稿」:一键还原原始草稿。
-5. 「重新生成」再试一次;× 关闭面板。**不点确认就绝不会动输入框。**
-6. 若主进程桥接失效,面板会在 3 秒内显示「主进程桥接未响应」,90 秒硬超时自动取消。
+1. 输入草稿 → 点 ✦：面板打开，面板状态栏显示当前模型，生成中显示已用秒数。
+2. 生成中点 **■ 停止** / **取消** / Esc / × 立即中止；请求真正取消，而不是只停止等待。
+3. 满意 → 「使用增强结果」：草稿被替换（按钮变绿，可回退）。
+4. 反悔 → 「恢复原稿」；连续应用增强后仍能还原最初草稿。
+5. 「重新生成」再试一次；× 关闭面板。再次点 ✦ 打开现有预览，不会自动重新生成。
+6. 生成期间切换会话模型：旧请求自动停止并提示，重新生成即用新模型。
+7. 120 秒硬超时自动取消。
 
 ## 排查
 
@@ -61,27 +69,24 @@ node desktop\patch-desktop.mjs install            # 自动探测 app.asar;也可
 node desktop\patch-desktop.mjs doctor
 ```
 
-依次输出:asar 注入状态 → 运行时文件 → provider/key 来源(不显示密钥)→
-`~/.zcode/zcode-prompt-enhancer/loader.log` 末尾 15 行。
+依次输出：main 注入状态 → host 桥状态 → 运行时文件与版本 → 模型来源说明 →
+`loader.log` 末尾 15 行。按钮常见错误信息都会指向具体修复步骤（重装集成 / 重启 ZCode）。
 
-## 卸载(还原 ZCode 官方状态)
+## 卸载（还原 ZCode 官方状态）
 
 ```bash
-node desktop/patch-desktop.mjs remove --purge     # ZCode 退出后执行
+node desktop\patch-desktop.mjs remove --purge     # ZCode 退出后执行
 ```
 
-- `remove` 从 `out/main/index.js` 剥离本项目的注入行并重写归档——**归档内容回到官方状态**;
-  未打过补丁时是空操作。`--purge` 同时删除运行时目录。
-- 再到 ZCode **设置 → 插件** 卸载 "Prompt Enhancer",即完全回到未安装状态。
-- 官方 ZCode 升级会用官方 app.asar 整体覆盖,注入自动消失(升级后需重新 install)。
-- 容错:若只删了运行时目录而忘记 remove,残留注入行加载失败只会在日志打印一条错误,
-  不影响 ZCode 运行;随后 `remove` 仍可清理。
+- `remove` 剥离 main 注入行与 host wrapper 并重写归档——**两个入口都回到官方字节**。
+- `--purge` 同时删除运行时目录；再到 ZCode 设置 → 插件卸载 Prompt Enhancer 即完全未安装。
+- 官方 ZCode 升级会用官方 app.asar 整体覆盖，补丁自动消失（升级后需重新 install）。
 
 ## 状态检查
 
 ```bash
-node desktop/patch-desktop.mjs check
+node desktop\patch-desktop.mjs check
 ```
 
-回环保证:`test/desktop-patch.test.mjs` 用合成归档验证 install→remove 后每个文件字节
-与原始一致(含 4 字节对齐边界),并校验 loader/overlay 语法。
+回环保证：`test/desktop-install.test.mjs` 与 `test/desktop-patch.test.mjs` 用合成归档验证
+install→remove 后 main/host 每个文件与原始一致（含 4 字节对齐边界），并校验脚本语法。

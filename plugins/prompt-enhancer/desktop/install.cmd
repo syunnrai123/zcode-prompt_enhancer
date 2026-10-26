@@ -13,18 +13,17 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-echo IMPORTANT: Fully quit ZCode first, including the tray icon.
-echo This script refuses to write app.asar while ZCode.exe is running.
+echo The installer waits until every ZCode.exe process exits.
+echo It will not force-close or restart ZCode. Keep this window open.
 echo.
-pause
-node "%~dp0patch-desktop.mjs" install %*
+node "%~dp0patch-desktop.mjs" install --wait-for-exit %*
 set RC=%ERRORLEVEL%
 echo.
 if not "%RC%"=="0" (
   echo [FAILED] See the message above.
 ) else (
   echo [OK] Restart ZCode. A star button appears in the composer toolbar.
-  echo Config: %USERPROFILE%\.zcode\zcode-prompt-enhancer\config.json
+  echo Generation uses the current session model - no API key needed.
 )
 echo.
 pause
