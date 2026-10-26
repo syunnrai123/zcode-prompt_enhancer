@@ -17,13 +17,19 @@
 
 ## 安装(需本机有 Node ≥ 18,且 ZCode 已完全退出)
 
+> 已从插件市场安装的用户,`dist/` 已随插件分发,无需 npm install / build,直接双击
+> `desktop\install.cmd` 即可(等价于下面的 `node desktop/patch-desktop.mjs install`)。
+> Windows 的 `cmd` 里 `cd` 不切换盘符,请务必先 `cd /d` 或直接双击脚本。
+
+从源码安装时:
+
 ```bash
-cd plugins/prompt-enhancer
+cd /d E:\JSProjects\zcode-plugin-prompt-enhancer\plugins\prompt-enhancer
 npm install && npm run build
-node desktop/patch-desktop.mjs install            # 自动探测 app.asar;也可 --asar <路径>
+node desktop\patch-desktop.mjs install            # 自动探测 app.asar;也可 --asar <路径>
 ```
 
-安装器会把 loader、overlay 与 `dist/` 复制到自包含的运行时目录
+或直接双击 `desktop\install.cmd`。安装器会把 loader、overlay 与 `dist/` 复制到自包含的运行时目录
 `~/.zcode/zcode-prompt-enhancer/`(与 ZCode 插件缓存解耦,插件更新不影响按钮),
 并在该目录的 `config.json` 里保留/合并你的配置:
 
