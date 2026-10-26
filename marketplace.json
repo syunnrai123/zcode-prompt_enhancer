@@ -1,9 +1,15 @@
 {
-  "name": "dev-zcode-plugin-prompt-enhancer-46604151",
+  "name": "zcode-prompt-enhancer",
+  "metadata": {
+    "description": "Prompt enhancement for ZCode: concise rewrites, desktop composer button, preview/apply/undo, slash command and MCP tool.",
+    "description_i18n": {
+      "zh-CN": "ZCode 提示词增强:精炼改写、输入框 ✦ 按钮、独立预览与回退、斜杠命令与 MCP 工具。"
+    }
+  },
   "plugins": [
     {
       "name": "prompt-enhancer",
-      "source": "./prompt-enhancer",
+      "source": "./plugins/prompt-enhancer",
       "version": "0.2.0",
       "description": "Prompt enhancer for ZCode: rewrite draft prompts into clear, concise, unambiguous instructions via the desktop input-box button, the /enhance-prompt slash command, or the enhance_prompt MCP tool. Supports GLM (Z.ai), OpenAI-compatible and Anthropic providers.",
       "displayName": "Prompt Enhancer",
@@ -12,7 +18,8 @@
       },
       "description_i18n": {
         "zh-CN": "通过输入框 ✦ 按钮、/enhance-prompt 命令或 enhance_prompt 工具将草稿提示词改写为清晰、精炼、无歧义的指令(精炼优先,少引用具体文件);支持 GLM、OpenAI 兼容与 Anthropic 提供方,未配置密钥时按同一规则就地增强。"
-      }
+      },
+      "category": "productivity"
     }
   ]
 }

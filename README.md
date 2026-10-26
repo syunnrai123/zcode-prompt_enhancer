@@ -1,20 +1,23 @@
 # zcode-plugin-prompt-enhancer
 
-ZCode 提示词增强插件的工作区。插件源码与本地测试市场位于 `plugins/`:
+ZCode 提示词增强插件。仓库根目录本身即插件市场(Git 源只识别仓库根部的
+`marketplace.json` 或 `.claude-plugin/marketplace.json`):
 
+- 市场清单:[marketplace.json](marketplace.json)
 - 插件源码:[plugins/prompt-enhancer](plugins/prompt-enhancer)(架构说明见其 [README.md](plugins/prompt-enhancer/README.md))
 - 桌面输入框按钮(✦ 增强/预览/回退):[plugins/prompt-enhancer/desktop](plugins/prompt-enhancer/desktop/README.md)
-- 测试市场清单:[plugins/marketplace.json](plugins/marketplace.json)
 
 ## 快速开始
 
-1. 在 ZCode **插件市场 → 添加 → 添加插件市场** 中粘贴市场根目录:
+1. 在 ZCode **插件市场 → 添加 → 添加插件市场** 中粘贴仓库地址:
 
    ```
-   E:\JSProjects\zcode-plugin-prompt-enhancer\plugins
+   https://github.com/syunnrai123/zcode-prompt_enhancer.git
    ```
 
-2. 在 **个人 → dev-zcode-plugin-prompt-enhancer-46604151** 找到 "Prompt Enhancer" 安装。
+   本地测试也可粘贴目录 `E:\JSProjects\zcode-plugin-prompt-enhancer`。
+
+2. 添加后在 **个人 → zcode-prompt-enhancer** 找到 "Prompt Enhancer" 安装。
 
 3. (可选,推荐)启用输入框按钮:完全退出 ZCode 后运行
 

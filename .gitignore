@@ -2,3 +2,5 @@ node_modules/
 dist-test/
 *.tsbuildinfo
 .pe-new.tmp
+.tmp-*/
+.tmp-*.js
