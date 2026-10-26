@@ -21,7 +21,7 @@ import type { JsonRpcId, JsonRpcRequest, JsonRpcResponse } from './stdio.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'prompt-enhancer';
-const SERVER_VERSION = '0.2.0';
+const SERVER_VERSION = '0.2.1';
 
 export interface McpTool {
   readonly name: string;

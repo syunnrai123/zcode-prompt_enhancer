@@ -1,6 +1,6 @@
 {
   "name": "prompt-enhancer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Prompt enhancer for ZCode: rewrite draft prompts into clear, concise, unambiguous instructions (concise-first contract, at most one file anchor) via the desktop input-box ✦ button, the /enhance-prompt slash command, or the enhance_prompt MCP tool. Supports GLM (Z.ai), OpenAI-compatible and Anthropic providers.",
   "author": { "name": "zcode-plugin-prompt-enhancer contributors" },
   "license": "MIT",
