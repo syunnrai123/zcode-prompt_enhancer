@@ -34,6 +34,31 @@ function streamResult(text) {
         emitContentDelta(text.slice(i, i + chunkSize));
     }
 }
+/**
+ * Exit only after stdout has flushed. Writing a marker to a pipe and calling
+ * process.exit() immediately can drop the final line on Windows, which would
+ * leave the desktop bridge waiting forever.
+ */
+function flushExit(code) {
+    let exited = false;
+    const finish = () => {
+        if (exited)
+            return;
+        exited = true;
+        process.exit(code);
+    };
+    const fallback = setTimeout(finish, 400);
+    try {
+        process.stdout.write('', () => {
+            clearTimeout(fallback);
+            finish();
+        });
+    }
+    catch {
+        clearTimeout(fallback);
+        finish();
+    }
+}
 async function main() {
     try {
         const raw = await readStdin();
@@ -41,7 +66,7 @@ async function main() {
         const prompt = typeof input.prompt === 'string' ? input.prompt : '';
         if (!prompt.trim()) {
             process.stdout.write('[ENHANCED]\n');
-            process.exit(0);
+            flushExit(0);
         }
         const container = buildContainer();
         const enhancer = container.resolve(Tokens.Enhancer);
@@ -53,13 +78,13 @@ async function main() {
         });
         streamResult(result.enhancedPrompt);
         process.stdout.write(`[ENHANCED]${result.enhancedPrompt.replace(/\n/g, '{{NEWLINE}}')}\n`);
-        process.exit(0);
+        flushExit(0);
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         process.stderr.write(`[prompt-enhancer] Error: ${message}\n`);
         process.stdout.write(`[ENHANCED_ERROR]${message.replace(/\n/g, ' ')}\n`);
-        process.exit(1);
+        flushExit(1);
     }
 }
 main();

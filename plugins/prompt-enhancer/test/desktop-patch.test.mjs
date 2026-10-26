@@ -118,3 +118,11 @@ test("loader and overlay pass a syntax check", () => {
 test.after(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
+
+test("loader deliver() passes an object, not a double-encoded string", () => {
+  const src = fs.readFileSync(path.join(HERE, "..", "desktop", "inject-main.cjs"), "utf8");
+  // Regression: JSON.stringify(JSON.stringify(msg)) makes __peDeliver receive a
+  // string; every response is then dropped silently and the UI spins forever.
+  assert.ok(!/JSON\.stringify\(JSON\.stringify\(/.test(src), "double JSON encoding reintroduced");
+  assert.match(src, /window\.__peDeliver\(.*JSON\.stringify\(msg\)/);
+});

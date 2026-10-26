@@ -3,7 +3,7 @@ import { ENHANCE_SYSTEM_PROMPT } from '../core/system-prompt.js';
 import { errorResponse, INTERNAL_ERROR, METHOD_NOT_FOUND, response, startStdio, } from './stdio.js';
 const PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'prompt-enhancer';
-const SERVER_VERSION = '0.2.1';
+const SERVER_VERSION = '0.2.2';
 export const TOOLS = [
     {
         name: 'enhance_prompt',

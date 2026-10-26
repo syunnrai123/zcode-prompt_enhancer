@@ -1,18 +1,20 @@
 /* ZCode Prompt Enhancer — renderer overlay (self-contained IIFE).
  *
  * Injected into renderer windows by inject-main.cjs. Adds:
- *   - a "enhance" (增强) icon button in the composer toolbar row, next to the
- *     native tool buttons (foreign nodes between React children are left alone
- *     by React; a rescan loop re-mounts anything a re-render dropped);
- *   - a preview container mounted inside the composer card, below the toolbar
- *     row: streams the enhanced prompt as it is generated, keeps it editable,
- *     and only replaces the input draft when the user clicks "使用增强结果";
- *   - a revert path ("恢复原稿") that puts the original draft back via the
- *     composer's built-in E2E lexical bridge (__zcodeLexicalInputE2E).
+ *   - an "enhance" (增强) icon button in the composer toolbar, placed just
+ *     LEFT of the right-hand cluster (model selector / context capacity /
+ *     send). Foreign nodes between React children are left alone by React;
+ *     a rescan loop re-mounts anything a re-render dropped or reordered.
+ *   - a preview container mounted inside the composer card below the toolbar
+ *     row: streams the enhanced prompt as it is generated, stays editable,
+ *     and only replaces the input draft when the user confirms.
+ *   - apply ("使用增强结果") / revert ("恢复原稿") via the composer's built-in
+ *     E2E lexical bridge (__zcodeLexicalInputE2E), cancel while generating,
+ *     and a bridge watchdog so the UI can never spin forever silently.
  *
- * All colors/fonts come from the app's own CSS custom properties so light,
- * dark and branded themes apply automatically. Communication with the main
- * process: requests via polled window globals, responses via __peDeliver.
+ * All colors/fonts come from the app's CSS custom properties. Communication
+ * with the main process: requests via polled window globals, responses via
+ * __peDeliver, liveness via the loader-stamped __peBridgeTs heartbeat.
  */
 (function () {
   if (window.__peOverlay) return;
@@ -25,12 +27,24 @@
   function L(zh, en) { return ZH ? zh : en; }
 
   var INPUT_SEL = '[data-testid="v4-composer-input"]';
+  /* Right-hand cluster of the toolbar: model selector, context capacity, send.
+   * The button mounts immediately before the first of these. */
+  var RIGHT_CLUSTER_SEL = [
+    '[data-testid="chat-model-select-trigger"]',
+    '[data-testid="chat-context-usage-trigger"]',
+    ".chat-context-usage-trigger",
+    '[data-testid="v4-composer-send"]'
+  ].join(", ");
   var CUA_BTN_SEL = '[data-testid="v4-composer-cua-entry"]';
+
+  var BRIDGE_STALE_MS = 3000;  // loader heartbeat older than this = bridge down
+  var HARD_TIMEOUT_MS = 90000; // overlay-side cap: never spin forever
 
   /* ---------- channel ---------- */
 
   var routes = {}; // request id -> {onDelta,onDone,onError}
   var reqSeq = 0;
+  var activeId = 0;
 
   window.__peDeliver = function (msg) {
     var r = routes[msg && msg.id];
@@ -40,14 +54,23 @@
     else if (msg.type === "error") { delete routes[msg.id]; r.onError && r.onError(msg.message || "unknown error"); }
   };
 
+  function bridgeFresh() {
+    var ts = window.__peBridgeTs;
+    return typeof ts === "number" && (Date.now() - ts) < BRIDGE_STALE_MS;
+  }
   function callEnhance(draft, handlers) {
     var id = ++reqSeq;
     routes[id] = handlers;
+    activeId = id;
     window.__peRequest = { id: id, draft: draft };
     window.__peRequestSeq = id;
   }
   function cancelEnhance() {
-    if (reqSeq) { window.__peCancel = { id: reqSeq }; window.__peCancelSeq = reqSeq; }
+    if (!activeId) return;
+    delete routes[activeId];
+    window.__peCancel = { id: activeId };
+    window.__peCancelSeq = activeId;
+    activeId = 0;
   }
 
   /* ---------- DOM helpers ---------- */
@@ -117,7 +140,6 @@
     ".pe-panel-x:hover{background:var(--color-surface-hover,rgba(0,0,0,.06));color:var(--color-foreground,#222)}",
     ".pe-panel-body{padding:0}",
     ".pe-panel textarea{display:block;width:100%;min-height:84px;max-height:260px;resize:none;border:0;outline:0;padding:10px 12px;background:transparent;color:var(--color-foreground,#222);font-family:var(--font-sans,system-ui,sans-serif);font-size:var(--font-text-sm-size,13px);line-height:1.6;overflow:auto}",
-    ".pe-panel textarea:focus{background:transparent}",
     ".pe-panel-foot{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid var(--color-border,#eceef2)}",
     ".pe-btn-primary{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:0;border-radius:8px;background:var(--color-primary,#5b6cff);color:var(--color-primary-foreground,#fff);font-size:12.5px;font-weight:var(--font-weight-medium,500);cursor:pointer}",
     ".pe-btn-primary:hover{filter:brightness(1.06)}",
@@ -171,23 +193,37 @@
     body.appendChild(ta);
 
     var foot = el("div", "pe-panel-foot");
+    var cancelBtn = el("button", "pe-btn-ghost", L("取消", "Cancel"));
+    cancelBtn.type = "button"; cancelBtn.style.display = "none";
     var applyBtn = el("button", "pe-btn-primary", L("使用增强结果", "Use enhanced"));
     applyBtn.type = "button"; applyBtn.disabled = true;
     var revertBtn = el("button", "pe-btn-ghost", L("恢复原稿", "Restore draft"));
     revertBtn.type = "button";
     var retryBtn = el("button", "pe-btn-ghost", L("重新生成", "Retry"));
-    retryBtn.type = "button";
+    retryBtn.type = "button"; retryBtn.style.display = "none";
     var note = el("span", "pe-foot-note", "");
-    foot.appendChild(applyBtn); foot.appendChild(revertBtn); foot.appendChild(retryBtn); foot.appendChild(note);
+    foot.appendChild(cancelBtn); foot.appendChild(applyBtn); foot.appendChild(revertBtn); foot.appendChild(retryBtn); foot.appendChild(note);
 
     panel.appendChild(head); panel.appendChild(body); panel.appendChild(foot);
 
+    /* Button sits immediately LEFT of the right-hand cluster (model selector,
+     * context capacity, send). Falls back to after the CUA tool button. */
     function mount() {
-      var anchor = row.querySelector(CUA_BTN_SEL);
-      if (anchor && anchor.parentElement === row && anchor.nextSibling !== btn) {
-        row.insertBefore(btn, anchor.nextSibling);
-      } else if (!btn.parentElement || btn.parentElement !== row) {
-        row.appendChild(btn);
+      var anchor = null;
+      try {
+        var kids = row.children;
+        for (var i = 0; i < kids.length; i++) {
+          var k = kids[i];
+          if ((k.matches && k.matches(RIGHT_CLUSTER_SEL)) ||
+            (k.querySelector && k.querySelector(RIGHT_CLUSTER_SEL))) { anchor = k; break; }
+        }
+      } catch (e) { }
+      if (anchor && anchor.parentElement === row) {
+        if (btn.nextSibling !== anchor) row.insertBefore(btn, anchor);
+      } else {
+        var cua = row.querySelector(CUA_BTN_SEL);
+        if (cua && cua.parentElement === row && cua.nextSibling !== btn) row.insertBefore(btn, cua.nextSibling);
+        else if (btn.parentElement !== row) row.appendChild(btn);
       }
       var ref = row.nextSibling;
       if (ref && ref.parentElement === card && ref !== panel) card.insertBefore(panel, ref);
@@ -205,7 +241,7 @@
       btn.classList.toggle("pe-applied", !!ap);
       if (ap) btn.title = L("提示词已增强(点击查看/撤销)", "Prompt enhanced (click to review/undo)");
       else btn.title = L("增强提示词", "Enhance prompt");
-      revertBtn.style.display = ap ? "" : "none";
+      revertBtn.style.display = ap && !state.busy ? "" : "none";
     }
 
     function currentDraft() {
@@ -218,8 +254,15 @@
       try { api.setText(text); return true; } catch (e) { return false; }
     }
 
+    function resetBusyUi() {
+      state.busy = false;
+      btn.disabled = false; btn.innerHTML = ICON;
+      cancelBtn.style.display = "none";
+      ta.readOnly = false;
+      refreshApplied();
+    }
+
     function run() {
-      if (state.busy) return;
       var draft = currentDraft();
       state.original = draft;
       if (!draft.trim()) {
@@ -231,16 +274,36 @@
       }
       state.busy = true; state.dirty = false; state.text = "";
       ta.value = ""; ta.readOnly = true;
-      btn.disabled = true; btn.innerHTML = SPINNER;
+      btn.disabled = false; btn.innerHTML = SPINNER;
+      cancelBtn.style.display = "";
       applyBtn.disabled = true; retryBtn.style.display = "none"; revertBtn.style.display = "none";
       note.textContent = "";
       var t0 = Date.now();
-      setStatus(L("生成中…", "Generating…"), false);
+      var warnedBridge = false;
+      setStatus(bridgeFresh()
+        ? L("生成中…", "Generating…")
+        : L("等待主进程桥接…", "Waiting for main-process bridge…"), !bridgeFresh());
       openPanel();
+
       var tick = setInterval(function () {
+        if (stale()) { clearInterval(tick); return; }
         if (!state.busy) { clearInterval(tick); return; }
-        setStatus(L("生成中…", "Generating…") + " " + ((Date.now() - t0) / 1000).toFixed(1) + "s", false);
-      }, 100);
+        var secs = ((Date.now() - t0) / 1000).toFixed(1);
+        if (!bridgeFresh()) {
+          warnedBridge = true;
+          setStatus(L("主进程桥接未响应(可点取消;重启 ZCode 可修复)", "Main-process bridge not responding (cancel; restarting ZCode fixes it)"), true);
+        } else {
+          setStatus(L("生成中…", "Generating…") + " " + secs + "s", false);
+        }
+        if (Date.now() - t0 > HARD_TIMEOUT_MS) {
+          clearInterval(tick);
+          cancelEnhance();
+          resetBusyUi();
+          applyBtn.disabled = !ta.value.trim();
+          retryBtn.style.display = "";
+          setStatus(L("超时未收到响应,已自动取消", "Timed out with no response; cancelled"), true);
+        }
+      }, 200);
 
       callEnhance(draft, {
         onDelta: function (chunk) {
@@ -250,35 +313,47 @@
         },
         onDone: function (finalText, ms) {
           if (stale()) return;
-          state.busy = false; clearInterval(tick);
+          clearInterval(tick);
           state.text = finalText || state.text;
           if (!state.dirty) ta.value = state.text;
-          ta.readOnly = false;
-          btn.disabled = false; btn.innerHTML = ICON;
+          resetBusyUi();
           applyBtn.disabled = !ta.value.trim();
           retryBtn.style.display = "";
-          refreshApplied();
           setStatus(L("已生成", "Ready") + " · " + (ms / 1000).toFixed(1) + "s", false);
           note.textContent = L("确认后才会替换输入框内容", "The composer is replaced only after you confirm");
         },
         onError: function (message) {
           if (stale()) return;
-          state.busy = false; clearInterval(tick);
-          ta.readOnly = false;
-          btn.disabled = false; btn.innerHTML = ICON;
-          applyBtn.disabled = true; retryBtn.style.display = "";
-          refreshApplied();
+          clearInterval(tick);
+          resetBusyUi();
+          applyBtn.disabled = true;
+          retryBtn.style.display = "";
           setStatus(message, true);
         }
       });
     }
 
+    function cancel() {
+      if (!state.busy) return;
+      cancelEnhance();
+      state.busy = false;
+      btn.disabled = false; btn.innerHTML = ICON;
+      cancelBtn.style.display = "none";
+      ta.readOnly = false;
+      applyBtn.disabled = !ta.value.trim();
+      retryBtn.style.display = "";
+      refreshApplied();
+      setStatus(L("已取消", "Cancelled"), false);
+    }
+
     btn.addEventListener("click", function (e) {
       e.preventDefault(); e.stopPropagation();
+      if (state.busy) { cancel(); return; } // click again to cancel
       if (panel.style.display === "none") { refreshApplied(); run(); }
       else closePanel();
     });
-    x.addEventListener("click", closePanel);
+    cancelBtn.addEventListener("click", cancel);
+    x.addEventListener("click", function () { if (state.busy) cancel(); closePanel(); });
     retryBtn.addEventListener("click", function () { run(); });
     applyBtn.addEventListener("click", function () {
       var text = ta.value;
@@ -305,7 +380,7 @@
       }
     });
     ta.addEventListener("input", function () { state.dirty = true; applyBtn.disabled = !ta.value.trim(); });
-    panel.addEventListener("keydown", function (e) { if (e.key === "Escape") closePanel(); });
+    panel.addEventListener("keydown", function (e) { if (e.key === "Escape") { if (state.busy) cancel(); closePanel(); } });
 
     mount();
     refreshApplied();

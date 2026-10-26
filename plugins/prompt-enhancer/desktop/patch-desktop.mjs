@@ -8,7 +8,11 @@
  *   node patch-desktop.mjs install [--asar <app.asar>] [--runtime <dir>] [--reset-config]
  *   node patch-desktop.mjs remove  [--asar <app.asar>] [--purge]
  *   node patch-desktop.mjs check   [--asar <app.asar>]
+ *   node patch-desktop.mjs doctor  [--runtime <dir>]
  *
+ * `doctor` reports patch state, runtime files, effective provider/key source
+ * (never the key itself) and the tail of loader.log — use it first when the
+ * composer button spins or never appears.
  * - install/remove are idempotent: install replaces any previous line of ours
  *   (any path), remove strips all of them and writes the archive only when a
  *   line was actually removed — after which the app behaves exactly like the
@@ -113,6 +117,68 @@ function copyRuntime(runtimeDir, resetConfig) {
   return { runtimeDir, loaderDst, cfgPath };
 }
 
+function cmdDoctor(runtimeExplicit) {
+  const asarPath = defaultAsarCandidates().find((c) => c && fs.existsSync(c));
+  info("=== 1. app.asar patch ===");
+  if (!asarPath) {
+    info("app.asar: NOT FOUND (pass ZCODE_ASAR env var)");
+  } else {
+    try {
+      const parsed = readArchive(asarPath);
+      const text = readEntryText(parsed, ENTRY);
+      fs.closeSync(parsed.fd);
+      info(`app.asar: ${asarPath}`);
+      info(`injection: ${stripInjectLines(text) !== text ? "PATCHED" : "clean (button will not appear)"}`);
+    } catch (e) {
+      info(`app.asar read failed: ${e.message}`);
+    }
+  }
+
+  const runtimeDir = path.resolve(
+    runtimeExplicit || path.join(os.homedir(), ".zcode", "zcode-prompt-enhancer")
+  );
+  info("\n=== 2. runtime ===");
+  info(`runtime: ${runtimeDir} ${fs.existsSync(runtimeDir) ? "" : "(MISSING — run install)"}`);
+  for (const f of ["inject-main.cjs", "overlay.js", "dist/cli.js", "config.json"]) {
+    info(`  ${f}: ${fs.existsSync(path.join(runtimeDir, f)) ? "ok" : "MISSING"}`);
+  }
+
+  info("\n=== 3. provider/key ===");
+  const cfg = {};
+  try { Object.assign(cfg, JSON.parse(fs.readFileSync(path.join(runtimeDir, "config.json"), "utf8"))); } catch (e) { }
+  let cliOpts = null;
+  try {
+    const cli = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".zcode", "cli", "config.json"), "utf8"));
+    cliOpts = cli?.plugins?.options?.["prompt-enhancer@zcode-prompt-enhancer"] ?? null;
+  } catch (e) { }
+  for (const [k, envNames] of Object.entries({
+    provider: [],
+    api_key: ["PROMPT_ENHANCER_API_KEY", "ZAI_API_KEY", "ZHIPUAI_API_KEY", "GLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+    base_url: [],
+    model: [],
+  })) {
+    const localVal = cfg[k];
+    const pluginVal = cliOpts ? cliOpts[k] : undefined;
+    let src = "none";
+    let value = "";
+    if (localVal != null && localVal !== "") { src = "config.json"; value = localVal; }
+    else if (pluginVal != null && pluginVal !== "") { src = "ZCode plugin settings"; value = pluginVal; }
+    else if (envNames.some((n) => process.env[n] && process.env[n].trim())) { src = "environment"; value = "(env)"; }
+    const shown = src === "none"
+      ? "(not set)"
+      : k === "api_key" ? `(set via ${src}, hidden)` : `${value} via ${src}`;
+    info(`  ${k}: ${shown}`);
+  }
+
+  info("\n=== 4. loader.log (last 15 lines) ===");
+  try {
+    const lines = fs.readFileSync(path.join(runtimeDir, "loader.log"), "utf8").trim().split("\n");
+    info(lines.slice(-15).join("\n"));
+  } catch (e) {
+    info("(no loader.log yet — ZCode may not have been restarted after install)");
+  }
+}
+
 function cmdCheck(asarPath) {
   let text;
   try {
@@ -163,6 +229,21 @@ function cmdInstall(asarPath, runtimeExplicit, resetConfig, allowRunning) {
   info(`runtime: ${runtimeDir}`);
   info(`config:  ${cfgPath} (provider/api_key live here)`);
   info("restart ZCode; a ✦ button appears next to the composer tools.");
+
+  // Self-check the bundled CLI with the mock provider (no network/keys needed).
+  try {
+    const env = Object.assign({}, process.env, { PROMPT_ENHANCER_PROVIDER: "mock" });
+    const out = execSync(`"${process.execPath}" "${path.join(runtimeDir, "dist", "cli.js")}"`, {
+      env,
+      encoding: "utf8",
+      timeout: 30000,
+      input: JSON.stringify({ prompt: "self check" }),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    info(out.includes("[ENHANCED]") ? "self-check: CLI OK" : "self-check: CLI returned no marker (run doctor)");
+  } catch (e) {
+    info("self-check failed: " + String(e.message || e).split("\n")[0]);
+  }
 }
 
 function cmdRemove(asarPath, purge, allowRunning) {
@@ -206,6 +287,9 @@ switch (cmd) {
   case "check":
     cmdCheck(resolveAsar(opt("--asar")));
     break;
+  case "doctor":
+    cmdDoctor(opt("--runtime"));
+    break;
   default:
-    fail("usage: node patch-desktop.mjs <install|remove|check> [--asar <app.asar>] [--runtime <dir>] [--purge] [--reset-config] [--allow-running]");
+    fail("usage: node patch-desktop.mjs <install|remove|check|doctor> [--asar <app.asar>] [--runtime <dir>] [--purge] [--reset-config] [--allow-running]");
 }

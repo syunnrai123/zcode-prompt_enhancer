@@ -1,14 +1,16 @@
 {
   "name": "zcode-plugin-prompt-enhancer",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Prompt enhancer plugin for ZCode: desktop input-box button + /enhance-prompt command + enhance_prompt MCP tool (GLM / OpenAI-compatible / Anthropic providers).",
   "type": "module",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/test/*.test.js\" \"test/desktop-patch.test.mjs\"",
+    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/test/*.test.js\" \"test/desktop-patch.test.mjs\" \"test/desktop-loader.test.mjs\"",
     "smoke": "node scripts/smoke-test.mjs"
   },
   "devDependencies": {
