@@ -1,0 +1,48 @@
+/**
+ * Minimal token-based DI container (singleton lifetime).
+ *
+ * A deliberately small implementation: the plugin has zero runtime
+ * dependencies, and a full IoC framework would outweigh the value. The
+ * container gives us constructor injection at the composition root
+ * (`index.ts`) and easy swapping of strategies/transports in tests.
+ */
+
+export interface Token<T> {
+  readonly key: symbol;
+  /** Phantom type carrier — never read at runtime. */
+  readonly __type?: T;
+}
+
+export function createToken<T>(name: string): Token<T> {
+  return { key: Symbol(name) };
+}
+
+export class Container {
+  private readonly factories = new Map<symbol, (c: Container) => unknown>();
+  private readonly instances = new Map<symbol, unknown>();
+
+  register<T>(token: Token<T>, factory: (c: Container) => T): this {
+    if (this.factories.has(token.key)) {
+      throw new Error(`Duplicate registration for token: ${String(token.key.description)}`);
+    }
+    this.factories.set(token.key, factory);
+    return this;
+  }
+
+  resolve<T>(token: Token<T>): T {
+    if (this.instances.has(token.key)) {
+      return this.instances.get(token.key) as T;
+    }
+    const factory = this.factories.get(token.key);
+    if (!factory) {
+      throw new Error(`No registration for token: ${String(token.key.description)}`);
+    }
+    const instance = factory(this);
+    this.instances.set(token.key, instance);
+    return instance as T;
+  }
+
+  has(token: Token<unknown>): boolean {
+    return this.factories.has(token.key);
+  }
+}

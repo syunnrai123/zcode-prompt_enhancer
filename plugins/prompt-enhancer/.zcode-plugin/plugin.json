@@ -1,0 +1,50 @@
+{
+  "name": "prompt-enhancer",
+  "version": "0.2.0",
+  "description": "Prompt enhancer for ZCode: rewrite draft prompts into clear, concise, unambiguous instructions (concise-first contract, at most one file anchor) via the desktop input-box ✦ button, the /enhance-prompt slash command, or the enhance_prompt MCP tool. Supports GLM (Z.ai), OpenAI-compatible and Anthropic providers.",
+  "author": { "name": "zcode-plugin-prompt-enhancer contributors" },
+  "license": "MIT",
+  "commands": "commands",
+  "skills": "skills",
+  "mcpServers": {
+    "prompt-enhancer": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/index.js"],
+      "env": {
+        "PROMPT_ENHANCER_PROVIDER": "${user_config.provider}",
+        "PROMPT_ENHANCER_API_KEY": "${user_config.api_key}",
+        "PROMPT_ENHANCER_BASE_URL": "${user_config.base_url}",
+        "PROMPT_ENHANCER_MODEL": "${user_config.model}",
+        "PROMPT_ENHANCER_TIMEOUT_SECONDS": "${user_config.timeout_seconds}",
+        "ZCODE_PLUGIN_ID": "prompt-enhancer"
+      }
+    }
+  },
+  "userConfig": {
+    "provider": {
+      "type": "string",
+      "default": "glm",
+      "description": "Enhancement provider: glm (Z.ai), openai-compatible (custom base_url), anthropic, or mock (offline test). Falls back to the first provider with an API key when unset."
+    },
+    "api_key": {
+      "type": "string",
+      "default": "",
+      "description": "API key for the selected provider. Leave empty to read PROMPT_ENHANCER_API_KEY / provider-specific keys (ZAI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY) from the environment. When no key is configured, /enhance-prompt degrades to agent-side enhancement with the same rule set."
+    },
+    "base_url": {
+      "type": "string",
+      "default": "",
+      "description": "Optional API base URL override. Defaults: glm=https://api.z.ai/api/paas/v4, openai-compatible=https://api.openai.com/v1, anthropic=https://api.anthropic.com."
+    },
+    "model": {
+      "type": "string",
+      "default": "",
+      "description": "Model id for the selected provider. Defaults: glm=glm-4.6, openai-compatible=gpt-4o-mini, anthropic=claude-sonnet-4-5."
+    },
+    "timeout_seconds": {
+      "type": "string",
+      "default": "60",
+      "description": "Hard wall-clock timeout in seconds for one enhancement request (15-180)."
+    }
+  }
+}
