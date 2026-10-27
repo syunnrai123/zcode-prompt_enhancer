@@ -199,6 +199,17 @@ async function smokeConsistency(serverInfo) {
   console.log(`[smoke] consistency OK (all artifacts report v${pkg.version})`);
 }
 
+async function smokeReleaseCheck() {
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(pluginRoot, 'scripts', 'release.mjs')], { stdio: ['ignore', 'pipe', 'inherit'] });
+    let out = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { out += chunk; process.stdout.write(chunk); });
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`release --check failed:\n${out}`))));
+  });
+  console.log('[smoke] release version check OK (four manifests agree)');
+}
+
 try {
   const serverInfo = await smokeMcp();
   await smokeCli();
@@ -206,6 +217,7 @@ try {
   await smokeProjectContext();
   await smokeCliInterruptedStream();
   await smokeConsistency(serverInfo);
+  await smokeReleaseCheck();
   console.log('[smoke] ALL PASS');
 } catch (error) {
   fail(error instanceof Error ? error.stack ?? error.message : String(error));

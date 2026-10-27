@@ -23,7 +23,15 @@ import {
   readEntryTextFrom,
   stripInjectLines,
   writeArchive,
+  writeArchiveEntries,
+  computeIntegrity,
+  readElectronFuses,
+  fuseState,
+  FUSE_SENTINEL,
+  ASAR_INTEGRITY_FUSE,
 } from "../desktop/asar-lib.mjs";
+import { HOST_REGISTRATION_VARIANTS, applyHostPatch } from "../desktop/host-patch.mjs";
+import { createHash } from "node:crypto";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pe-asar-test-"));
@@ -125,4 +133,65 @@ test("loader injects every renderer script and never spawns a CLI process", () =
     assert.ok(loader.includes(JSON.stringify(name)), `${name} must be injected`);
   }
   assert.ok(!/spawn\(|child_process/.test(loader), "generation must not spawn a CLI child");
+});
+
+test("computeIntegrity hashes content and splits blocks at the given size", () => {
+  const buf = Buffer.from("0123456789abcdef0123"); // 20 bytes
+  const integrity = computeIntegrity(buf, 8);
+  const sha = (b) => createHash("SHA256").update(b).digest("hex");
+  assert.equal(integrity.algorithm, "SHA256");
+  assert.equal(integrity.blockSize, 8);
+  assert.equal(integrity.hash, sha(buf));
+  assert.deepEqual(integrity.blocks, [sha(buf.subarray(0, 8)), sha(buf.subarray(8, 16)), sha(buf.subarray(16, 20))]);
+});
+
+test("writeArchiveEntries recomputes per-file asar integrity for replaced entries", () => {
+  const fx = fs.mkdtempSync(path.join(tmpRoot, "int-"));
+  const asar = path.join(fx, "app.asar");
+  const original = "console.log('official');\n";
+  buildArchive({ [ENTRY]: Buffer.from(original) }, asar);
+  const parsed = readArchive(asar);
+  const node = parsed.header.files.out.files.main.files["index.js"];
+  node.integrity = { algorithm: "SHA256", hash: "stale-hash", blockSize: 8, blocks: ["stale-block"] };
+  const patched = original + 'import("file:///x/inject-main.cjs"); // zcode-prompt-enhancer\n';
+  const result = writeArchiveEntries(asar, parsed, new Map([[ENTRY, patched]]));
+  assert.equal(result.integrityUpdated, 1, "one integrity field refreshed");
+  const expected = computeIntegrity(Buffer.from(patched, "utf8"), 8);
+  const reopened = readArchive(asar);
+  fs.closeSync(reopened.fd);
+  const fresh = reopened.header.files.out.files.main.files["index.js"];
+  assert.equal(fresh.integrity.hash, expected.hash, "hash matches the new bytes");
+  assert.deepEqual(fresh.integrity.blocks, expected.blocks, "blocks match at the preserved blockSize");
+  assert.equal(fresh.integrity.blockSize, 8, "original blockSize preserved");
+});
+
+test("readElectronFuses parses the fuse wire and reports named states", () => {
+  const fx = fs.mkdtempSync(path.join(tmpRoot, "fuse-"));
+  const sentinel = Buffer.from(FUSE_SENTINEL, "latin1");
+  const mk = (states) => {
+    const exe = path.join(fx, `exe-${states.join("-")}.bin`);
+    fs.writeFileSync(exe, Buffer.concat([Buffer.from("MZ junk before"), sentinel, Buffer.from([1]), Buffer.from(states)]));
+    return exe;
+  };
+  // Real builds encode states as ASCII '0'/'1'; raw 0/1 and 'r' also accepted.
+  const off = readElectronFuses(mk([0x30, 0x30, 0x30, 0x30, 0x30, 0x30]));
+  assert.equal(off.found, true);
+  assert.equal(fuseState(off, ASAR_INTEGRITY_FUSE), "disabled");
+  const on = readElectronFuses(mk([0x30, 0x30, 0x30, 0x30, 0x31, 0x30]));
+  assert.equal(fuseState(on, ASAR_INTEGRITY_FUSE), "enabled");
+  const removed = readElectronFuses(mk([0, 0, 0, 0, 0x72, 0]));
+  assert.equal(fuseState(removed, ASAR_INTEGRITY_FUSE), "removed");
+  const nonePath = path.join(fx, "no-sentinel.bin");
+  fs.writeFileSync(nonePath, Buffer.from("MZ no fuse wire here"));
+  const none = readElectronFuses(nonePath);
+  assert.equal(none.found, false);
+  assert.equal(fuseState(none, ASAR_INTEGRITY_FUSE), "unknown");
+});
+
+test("applyHostPatch error names the anchor list for future ZCode renames", () => {
+  assert.throws(
+    () => applyHostPatch("services.register(Qq,zz);\n"),
+    new RegExp("HOST_REGISTRATION_VARIANTS"),
+  );
+  assert.ok(Array.isArray(HOST_REGISTRATION_VARIANTS) && HOST_REGISTRATION_VARIANTS.length >= 1);
 });

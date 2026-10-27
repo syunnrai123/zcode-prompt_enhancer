@@ -19,13 +19,15 @@
 | `system-prompt.generated.js` | 渲染进程 | 由 `scripts/embed-system-prompt.mjs` 生成的唯一权威增强规则 |
 | `session-context.js` | 渲染进程 | 读取已提交 composer 的当前模型选择与工作区路由（`v4-model-config` + React fiber） |
 | `host-bridge.js` | 渲染进程 | 将草稿和模型/工作区路由送给 Host 项目增强接口；处理取消与旧版本协议 |
-| `overlay.js` | 渲染进程 | 工具行 ✦/■ 按钮、预览面板、应用/恢复/取消；模型切换自动停止旧请求 |
+| `overlay.js` | 渲染进程 | 工具行 ✦/■ 按钮、预览面板、应用/恢复/取消；模型切换自动停止旧请求。由 `desktop/src/overlay.ts` 编译生成，勿手改 |
+| `desktop/src/overlay.ts` | 源码 | overlay 的 TypeScript 源（`tsconfig.overlay.json` 编译为 `overlay.js`） |
 | `host-patch.mjs` | — | Host bundle 可逆补丁的 apply/strip/检测，按文件 URL 导入项目增强运行时 |
 | `dist/desktop/workspace-enhancer.js` | Host | 采集项目摘要、组装提示词、有限网络重试和完整结果校验 |
 | `dist/context/project-context.js` | Host | 有大小/时间限制的只读项目清单、目录和 Git 采集 |
 | `patch-desktop.mjs` | Node CLI | `install` / `remove` / `check` / `doctor`，纯 Node 实现 asar 双入口读写，原子替换，幂等 |
 | `install.cmd` / `uninstall.cmd` | Windows | 双击安装/卸载（自动 `cd /d`，安装器等待 ZCode 退出） |
-| `asar-lib.mjs` | — | asar 头解析/重写原语，与回环测试共享 |
+| `asar-lib.mjs` | — | asar 头解析/重写原语（含 per-file integrity 重算与 Electron fuse 探测），与回环测试共享 |
+| `scripts/release.mjs` | — | 四个版本清单的统一 bump/一致性检查（`--check` 由 smoke 强制执行） |
 
 ## 安装（本机需有 Node ≥ 18）
 
@@ -65,9 +67,11 @@ node desktop\patch-desktop.mjs install            # 自动探测 app.asar；也�
 2. 生成中点 **■ 停止** / **取消** / Esc / × 立即中止；请求真正取消，而不是只停止等待。
 3. 满意 → 「使用增强结果」：草稿被替换（按钮变绿，可回退）。
 4. 反悔 → 「恢复原稿」；连续应用增强后仍能还原最初草稿。
-5. 「重新生成」再试一次；× 关闭面板。再次点 ✦ 打开现有预览，不会自动重新生成。
+5. 「重新生成」再试一次；× 关闭面板。再次点 ✦ 打开现有预览，**草稿未变则直接复用上次结果，不重复请求**；只有「重新生成」会强制重跑。
 6. 生成期间切换会话模型：旧请求自动停止并提示，重新生成即用新模型。
 7. 120 秒硬超时自动取消。
+8. 原生输入框被清空时，预览面板同步清空，不残留旧提示词。
+9. 面板「历史 N」保留最近 10 条增强记录（按会话去重，重试替换同条），每条可删除，点击回填到预览框；行内显示草稿摘要与生成时间。手工改过预览文本时标题旁显示「已编辑」，复用/重试不会静默吞掉这些修改。
 
 ## 排查
 

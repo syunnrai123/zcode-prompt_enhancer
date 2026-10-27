@@ -6,7 +6,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { waitForZCodeExit } from "../desktop/install-state.mjs";
-import { ENTRY, buildArchive, readEntryTextFrom, stripInjectLines } from "../desktop/asar-lib.mjs";
+import { ENTRY, FUSE_SENTINEL, buildArchive, readEntryTextFrom, stripInjectLines } from "../desktop/asar-lib.mjs";
 import { HOST_ENTRY, applyHostPatch, isHostPatched, stripHostPatch } from "../desktop/host-patch.mjs";
 
 const patcher = fileURLToPath(new URL("../desktop/patch-desktop.mjs", import.meta.url));
@@ -84,4 +84,24 @@ test("install is idempotent and updates runtime without rewriting official entri
   const second = run("install");
   assert.match(second, /archive already patched; runtime files updated/);
   assert.equal(fs.statSync(asar).mtimeMs, before);
+});
+
+test("installer refuses to patch when the asar-integrity fuse is enabled", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pe-fuse-refuse-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const resources = path.join(root, "resources");
+  fs.mkdirSync(resources, { recursive: true });
+  const asar = path.join(resources, "app.asar");
+  buildArchive({ [ENTRY]: Buffer.from("official\n"), [HOST_ENTRY]: Buffer.from(HOST_SOURCE) }, asar);
+  // Electron fuse wire: sentinel + version byte + one state byte per fuse,
+  // EnableEmbeddedAsarIntegrityValidation (index 4) = 1.
+  fs.writeFileSync(
+    path.join(root, "ZCode.exe"),
+    Buffer.concat([Buffer.from("MZ"), Buffer.from(FUSE_SENTINEL, "latin1"), Buffer.from([1, 0x30, 0x30, 0x30, 0x30, 0x31, 0x30])]),
+  );
+  assert.throws(
+    () => execFileSync(process.execPath, [patcher, "install", "--asar", asar, "--runtime", path.join(root, "rt"), "--allow-running"], { encoding: "utf8", timeout: 30000, stdio: "pipe" }),
+    /refusing to patch|EnableEmbeddedAsarIntegrityValidation/,
+  );
+  assert.equal(readEntryTextFrom(asar, ENTRY), "official\n", "archive left untouched");
 });

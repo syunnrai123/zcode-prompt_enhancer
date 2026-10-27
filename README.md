@@ -43,5 +43,5 @@ npm test
 npm run smoke
 ```
 
-`dist/` 随插件分发并入库，修改源码后必须重新构建。桌面集成相关细节见
+`dist/` 与 `desktop/overlay.js`（由 `desktop/src/overlay.ts` 编译）随插件分发并入库，修改源码后必须重新构建。发版用 `node scripts/release.mjs --version X.Y.Z` 统一更新四处版本号，`node scripts/release.mjs` 校验一致性（smoke 会强制执行）。桌面集成相关细节见
 [plugins/prompt-enhancer/desktop/README.md](plugins/prompt-enhancer/desktop/README.md)。

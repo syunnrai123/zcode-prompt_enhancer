@@ -12,6 +12,7 @@
  */
 
 import fs from "node:fs";
+import crypto from "node:crypto";
 
 export const ENTRY = "out/main/index.js";
 export const INJECT_TAG = "zcode-prompt-enhancer";
@@ -21,6 +22,67 @@ export const INJECT_LINE_RE = new RegExp(
   String.raw`\n?;?import\("[^"]*inject-main\.cjs"\)[^\n]*${INJECT_TAG}[^\n]*;`,
   "g"
 );
+
+/* ---------- Electron asar per-file integrity ----------
+ * Archives built with integrity carry, per packed file:
+ *   integrity: { algorithm: "SHA256", hash, blockSize, blocks: [hex, ...] }
+ * Electron validates these when reading resources. Rewriting an entry's bytes
+ * without recomputing its integrity would corrupt the archive, so any entry
+ * we replace gets a fresh hash/block list. */
+const DEFAULT_INTEGRITY_BLOCK_SIZE = 4 * 1024 * 1024;
+
+export function computeIntegrity(buffer, blockSize = DEFAULT_INTEGRITY_BLOCK_SIZE) {
+  const blocks = [];
+  for (let off = 0; off < buffer.length; off += blockSize) {
+    blocks.push(crypto.createHash("SHA256").update(buffer.subarray(off, off + blockSize)).digest("hex"));
+  }
+  return {
+    algorithm: "SHA256",
+    hash: crypto.createHash("SHA256").update(buffer).digest("hex"),
+    blockSize,
+    blocks,
+  };
+}
+
+/* ---------- Electron fuse wire (read-only detection) ----------
+ * Layout (verified against the real ZCode executable): the ASCII sentinel is
+ * followed by [version:1][one state byte per fuse]. Real builds encode each
+ * state as the ASCII character '0' (=0x30, off) or '1' (=0x31, on); some
+ * tooling uses raw 0/1 bytes or 0x72 ('r', removed). Accept all encodings.
+ * We only need to know whether asar-integrity validation is ON, because then
+ * ANY header modification breaks the boot hash embedded in the binary and the
+ * patched app would not start — install must refuse up front. */
+export const FUSE_SENTINEL = "dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX";
+export const FUSE_NAMES = [
+  "RunAsNode",
+  "EnableCookieEncryption",
+  "EnableNodeOptionsEnvironmentVariable",
+  "EnableNodeCliInspectArguments",
+  "EnableEmbeddedAsarIntegrityValidation",
+  "OnlyLoadAppFromAsar",
+];
+export const ASAR_INTEGRITY_FUSE = "EnableEmbeddedAsarIntegrityValidation";
+
+export function readElectronFuses(exePath) {
+  const buf = fs.readFileSync(exePath);
+  const sentinel = Buffer.from(FUSE_SENTINEL, "latin1");
+  const at = buf.indexOf(sentinel);
+  if (at < 0) return { found: false, states: [] };
+  const base = at + sentinel.length + 1; // skip the fuse-wire version byte
+  const stateBytes = buf.subarray(base, base + 32);
+  if (stateBytes.length < FUSE_NAMES.length) return { found: false, states: [] };
+  return { found: true, states: Array.from(stateBytes) };
+}
+
+export function fuseState(fuses, name) {
+  const i = FUSE_NAMES.indexOf(name);
+  if (!fuses.found || i < 0 || i >= fuses.states.length) return "unknown";
+  const v = fuses.states[i];
+  if (v === 0x30 || v === 0) return "disabled";       // '0' / 0
+  if (v === 0x31 || v === 1) return "enabled";        // '1' / 1
+  if (v === 0x72) return "removed";                   // 'r'
+  return "unknown";
+}
 
 export function align4(n) {
   return n + ((4 - (n % 4)) % 4);
@@ -111,6 +173,7 @@ export function writeArchive(asarPath, parsed, entryPath, newEntryText) {
 export function writeArchiveEntries(asarPath, parsed, replacements) {
   let fd = parsed.fd;
   const { header, dataStart } = parsed;
+  let integrityUpdated = 0;
   try {
     const files = packedFiles(header, dataStart);
     const encoded = new Map();
@@ -120,6 +183,10 @@ export function writeArchiveEntries(asarPath, parsed, replacements) {
       const buffer = Buffer.from(text, "utf8");
       encoded.set(entry, buffer);
       entry.node.size = buffer.length;
+      if (entry.node.integrity) {
+        entry.node.integrity = computeIntegrity(buffer, entry.node.integrity.blockSize || DEFAULT_INTEGRITY_BLOCK_SIZE);
+        integrityUpdated++;
+      }
     }
 
     // Header length depends on the offset digits, and offsets depend on the
@@ -185,7 +252,7 @@ export function writeArchiveEntries(asarPath, parsed, replacements) {
     fs.closeSync(fd);
     fd = null;
     fs.renameSync(tmpPath, asarPath);
-    return { changed: [...encoded.keys()].map((f) => f.path) };
+    return { changed: [...encoded.keys()].map((f) => f.path), integrityUpdated };
   } finally {
     try { if (fd !== null) fs.closeSync(fd); } catch (_) { }
   }

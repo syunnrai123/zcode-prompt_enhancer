@@ -9,9 +9,22 @@
 (function () {
   "use strict";
 
-  var INPUT_ID = "v4-composer-input";
-  var COMPOSER_ID = "v4-composer";
-  var CONFIG_ID = "v4-model-config";
+  /* All ZCode anchors in one place — when a ZCode update renames a testid,
+   * committed composer prop or React internals marker, adapt here only.
+   * Nothing else in the file hardcodes an anchor name. */
+  var ANCHORS = {
+    inputId: "v4-composer-input",
+    composerId: "v4-composer",
+    configId: "v4-model-config",
+    configAttrs: { source: "data-source", provider: "data-provider", model: "data-model", thought: "data-thought" },
+    /* Props that identify the committed composer routing fiber. */
+    composerProps: ["workspacePath", "sessionId", "draftConfig", "composerDraftScopeToken", "snapshot"],
+    fiberPrefix: "__reactFiber$",
+    /* Where the services object may live on an ancestor: containers hold
+     * { zcodeAgentService, ... }; the last name is a direct prop. */
+    serviceContainers: ["services", "value"],
+    serviceDirect: "zcodeAgentService",
+  };
   var own = Object.prototype.hasOwnProperty;
 
   function fail(message) {
@@ -46,7 +59,7 @@
    * stale __reactFiber$ pointer. The returned path is root -> input. */
   function committedPath(input) {
     var keys = Object.getOwnPropertyNames(input).filter(function (key) {
-      return key.indexOf("__reactFiber$") === 0;
+      return key.indexOf(ANCHORS.fiberPrefix) === 0;
     });
     if (keys.length !== 1) fail("无法唯一定位输入框的 React fiber，请重试或更新桌面适配器");
     var attached = input[keys[0]];
@@ -107,8 +120,8 @@
 
   function composerIndexPath(input) {
     var committed = committedPath(input);
-    var composer = closestId(input, COMPOSER_ID);
-    if (!composer) fail("无法定位输入框所属的 v4-composer");
+    var composer = closestId(input, ANCHORS.composerId);
+    if (!composer) fail("无法定位输入框所属的 " + ANCHORS.composerId);
     var composerIndex = -1;
     for (var i = committed.path.length - 1; i >= 0; i--) {
       if (committed.path[i].stateNode === composer) { composerIndex = i; break; }
@@ -122,9 +135,11 @@
     var props = null;
     for (var j = located.index - 1; j >= 0; j--) {
       var candidate = located.committed.path[j].memoizedProps;
-      if (has(candidate, "workspacePath") && has(candidate, "sessionId") &&
-          has(candidate, "draftConfig") && has(candidate, "composerDraftScopeToken") &&
-          has(candidate, "snapshot")) {
+      var matchesAll = true;
+      for (var pi = 0; pi < ANCHORS.composerProps.length; pi++) {
+        if (!has(candidate, ANCHORS.composerProps[pi])) { matchesAll = false; break; }
+      }
+      if (matchesAll) {
         props = candidate;
         break;
       }
@@ -134,21 +149,21 @@
   }
 
   window.__peGetSessionContext = function (input) {
-    if (attr(input, "data-testid") !== INPUT_ID || !active(input)) {
-      fail("请传入当前可用的 v4-composer-input 输入框");
+    if (attr(input, "data-testid") !== ANCHORS.inputId || !active(input)) {
+      fail("请传入当前可用的 " + ANCHORS.inputId + " 输入框");
     }
-    var composer = closestId(input, COMPOSER_ID);
-    if (!composer) fail("无法定位输入框所属的 v4-composer");
+    var composer = closestId(input, ANCHORS.composerId);
+    if (!composer) fail("无法定位输入框所属的 " + ANCHORS.composerId);
     var configs = Array.prototype.filter.call(
-      composer.querySelectorAll('[data-testid="' + CONFIG_ID + '"]'),
-      function (node) { return closestId(node, COMPOSER_ID) === composer && active(node); }
+      composer.querySelectorAll('[data-testid="' + ANCHORS.configId + '"]'),
+      function (node) { return closestId(node, ANCHORS.composerId) === composer && active(node); }
     );
     if (configs.length !== 1) fail("当前输入栏模型配置缺失或不唯一，请等待模型选择完成");
     var config = configs[0];
-    if (attr(config, "data-source") !== "composer") fail("当前输入栏模型配置尚未就绪");
-    var providerId = requiredString(attr(config, "data-provider"), "当前模型 providerId");
-    var modelId = requiredString(attr(config, "data-model"), "当前模型 modelId");
-    var thought = attr(config, "data-thought");
+    if (attr(config, ANCHORS.configAttrs.source) !== "composer") fail("当前输入栏模型配置尚未就绪");
+    var providerId = requiredString(attr(config, ANCHORS.configAttrs.provider), "当前模型 providerId");
+    var modelId = requiredString(attr(config, ANCHORS.configAttrs.model), "当前模型 modelId");
+    var thought = attr(config, ANCHORS.configAttrs.thought);
     if (thought === null) fail("当前模型 reasoning level 字段缺失");
 
     var read = readCommittedProps(input);
@@ -191,15 +206,16 @@
    * provider owns `{ zcodeAgentService, ... }`; an adjacent provider component
    * holds the same object in its `services` prop. Both shapes are covered. */
   window.__peGetHostService = function (input) {
-    if (attr(input, "data-testid") !== INPUT_ID || !active(input)) {
-      fail("请传入当前可用的 v4-composer-input 输入框");
+    if (attr(input, "data-testid") !== ANCHORS.inputId || !active(input)) {
+      fail("请传入当前可用的 " + ANCHORS.inputId + " 输入框");
     }
     var located = composerIndexPath(input);
     var path = located.committed.path;
     for (var i = located.index; i >= 0; i--) {
       var props = path[i].memoizedProps;
       if (!props || typeof props !== "object") continue;
-      var candidates = [props.services, props.value];
+      var candidates = [];
+      for (var si = 0; si < ANCHORS.serviceContainers.length; si++) candidates.push(props[ANCHORS.serviceContainers[si]]);
       for (var c = 0; c < candidates.length; c++) {
         var services = candidates[c];
         if (services && typeof services === "object" &&
@@ -207,8 +223,8 @@
           return services;
         }
       }
-      if (props.zcodeAgentService && typeof props.zcodeAgentService === "object") {
-        return { zcodeAgentService: props.zcodeAgentService };
+      if (props[ANCHORS.serviceDirect] && typeof props[ANCHORS.serviceDirect] === "object") {
+        return { zcodeAgentService: props[ANCHORS.serviceDirect] };
       }
     }
     fail("无法定位当前会话的服务连接，请重试或重启 ZCode");

@@ -15,22 +15,6 @@ const body =
 fs.writeFileSync(OUT, body, "utf8");
 console.log(`[prompt-enhancer] wrote ${OUT} (${ENHANCE_SYSTEM_PROMPT.length} chars)`);
 
-/* 2) Stamp the overlay's VERSION from package.json so the plugin version has
- * exactly one source. The renderer cannot read package.json at runtime, so
- * the sync happens here at build time. */
-const OVERLAY = path.join(HERE, "..", "desktop", "overlay.js");
-const overlaySrc = fs.readFileSync(OVERLAY, "utf8");
-const match = /var VERSION = "([^"]*)";/.exec(overlaySrc);
-if (!match) {
-  throw new Error(`overlay.js has no 'var VERSION = "...";' line to stamp`);
-}
-if (match[1] !== pkg.version) {
-  fs.writeFileSync(
-    OVERLAY,
-    overlaySrc.replace(/var VERSION = "[^"]*";/, `var VERSION = ${JSON.stringify(pkg.version)};`),
-    "utf8"
-  );
-  console.log(`[prompt-enhancer] overlay VERSION stamped to ${pkg.version}`);
-} else {
-  console.log(`[prompt-enhancer] overlay VERSION already ${pkg.version}`);
-}
+/* 2) Stamp the overlay's VERSION (shared script — see stamp-overlay-version.mjs).
+ * Run here so `npm run build` remains the single documented build entry. */
+await import("./stamp-overlay-version.mjs");

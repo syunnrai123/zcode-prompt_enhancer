@@ -40,6 +40,9 @@ import {
   readEntryText,
   stripInjectLines,
   writeArchiveEntries,
+  readElectronFuses,
+  fuseState,
+  ASAR_INTEGRITY_FUSE,
 } from "./asar-lib.mjs";
 import {
   HOST_ENTRY,
@@ -47,6 +50,7 @@ import {
   applyHostPatch,
   isHostPatched,
   stripHostPatch,
+  hostPatchedVariant,
 } from "./host-patch.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -108,6 +112,29 @@ function ensureZCodeClosed(allowRunning) {
   if (running) throw new Error("ZCode is running. Close it first, or use install --after-exit to install automatically after exit.");
 }
 
+/* The executable sits next to the resources/ directory that owns app.asar.
+ * Used only for read-only Electron fuse detection. */
+function findAppExe(asarPath) {
+  const dir = path.dirname(path.dirname(path.resolve(asarPath)));
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => /\.exe$/i.test(n)); } catch (e) { return null; }
+  for (const p of ["ZCode.exe", "electron.exe"]) {
+    if (names.includes(p)) return path.join(dir, p);
+  }
+  return names[0] ? path.join(dir, names[0]) : null;
+}
+
+/* With the asar-integrity fuse on, Electron verifies a boot hash embedded in
+ * the binary against the archive header; any patch (however correct) makes
+ * the app refuse to start. Detect and refuse before touching anything. */
+function asarIntegrityFuseBlocksInstall(asarPath) {
+  const exe = findAppExe(asarPath);
+  if (!exe) return { exe: null, state: "no-exe" };
+  let fuses;
+  try { fuses = readElectronFuses(exe); } catch (e) { return { exe, state: "unreadable", error: e.message }; }
+  return { exe, state: fuseState(fuses, ASAR_INTEGRITY_FUSE), fuses };
+}
+
 function scheduleInstall(asarPath, runtimeExplicit, resetConfig) {
   const runtimeDir = path.resolve(runtimeExplicit || path.join(os.homedir(), ".zcode", "zcode-prompt-enhancer"));
   fs.mkdirSync(runtimeDir, { recursive: true });
@@ -160,9 +187,21 @@ function cmdDoctor(runtimeExplicit, asarExplicit) {
       info(`app.asar: ${asarPath}`);
       info(`injection: ${stripInjectLines(mainText) !== mainText ? "PATCHED" : "clean (button will not appear)"}`);
       info(`host bridge: ${isHostPatched(hostText) ? "PATCHED" : "clean (cannot reuse session model)"}`);
+      const variant = hostPatchedVariant(hostText);
+      if (isHostPatched(hostText) && variant) info(`host anchor: ${variant}`);
     } catch (e) {
       if (parsed) { try { fs.closeSync(parsed.fd); } catch (_) { } }
       info(`app.asar read failed: ${e.message}`);
+    }
+    const exe = findAppExe(asarPath);
+    if (exe) {
+      try {
+        const state = fuseState(readElectronFuses(exe), ASAR_INTEGRITY_FUSE);
+        info(`electron fuses (${path.basename(exe)}): ${ASAR_INTEGRITY_FUSE}=${state}` +
+          (state === "enabled" ? " (install refuses; a patched asar would not boot)" : ""));
+      } catch (e) { info(`electron fuses: unreadable (${e.message})`); }
+    } else {
+      info("electron fuses: no executable found next to app.asar (skipped)");
     }
   }
 
@@ -232,6 +271,13 @@ function cmdInstall(asarPath, runtimeExplicit, resetConfig, allowRunning) {
   }
 
   if (!fs.existsSync(SOURCE_ENHANCER)) fail("Compiled project-context runtime missing; run npm run build.");
+  const fuseInfo = asarIntegrityFuseBlocksInstall(asarPath);
+  if (fuseInfo.state === "enabled") {
+    fail(
+      `refusing to patch: ${fuseInfo.exe} enables Electron ${ASAR_INTEGRITY_FUSE}. ` +
+      "A patched app.asar would fail the boot-time header hash and ZCode would not start."
+    );
+  }
   const runtimeDir = path.resolve(
     runtimeExplicit || path.join(os.homedir(), ".zcode", "zcode-prompt-enhancer")
   );
@@ -257,9 +303,9 @@ function cmdInstall(asarPath, runtimeExplicit, resetConfig, allowRunning) {
       const replacements = new Map();
       if (changed.includes(ENTRY)) replacements.set(ENTRY, nextMain);
       if (changed.includes(HOST_ENTRY)) replacements.set(HOST_ENTRY, nextHost);
-      writeArchiveEntries(asarPath, parsed, replacements);
+      const result = writeArchiveEntries(asarPath, parsed, replacements);
       parsed = null;
-      info(`patched ${changed.join(", ")}`);
+      info(`patched ${changed.join(", ")}` + (result.integrityUpdated ? ` (recomputed ${result.integrityUpdated} asar integrity hashes)` : ""));
     }
   } catch (e) {
     if (parsed) { try { fs.closeSync(parsed.fd); } catch (_) { } }

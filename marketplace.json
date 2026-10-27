@@ -10,7 +10,7 @@
     {
       "name": "prompt-enhancer",
       "source": "./plugins/prompt-enhancer",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "description": "Prompt enhancer for ZCode: desktop button reuses the current session model (no extra key) with preview/apply/revert; slash command and MCP tool support optional external providers.",
       "displayName": "Prompt Enhancer",
       "displayName_i18n": {

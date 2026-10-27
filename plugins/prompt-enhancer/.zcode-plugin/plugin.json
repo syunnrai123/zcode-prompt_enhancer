@@ -1,15 +1,19 @@
 {
   "name": "prompt-enhancer",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Prompt enhancer for ZCode: project basics and recent Git context, validated output and bounded network retries; the desktop button reuses the current session model with preview/apply/revert, while commands and MCP optionally use external providers.",
-  "author": { "name": "zcode-plugin-prompt-enhancer contributors" },
+  "author": {
+    "name": "zcode-plugin-prompt-enhancer contributors"
+  },
   "license": "MIT",
   "commands": "commands",
   "skills": "skills",
   "mcpServers": {
     "prompt-enhancer": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/index.js"],
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/dist/index.js"
+      ],
       "env": {
         "PROMPT_ENHANCER_PROVIDER": "${user_config.provider}",
         "PROMPT_ENHANCER_API_KEY": "${user_config.api_key}",

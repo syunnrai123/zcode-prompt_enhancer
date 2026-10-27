@@ -144,9 +144,15 @@ function harness({ lexical = true, composers = 1, available = true } = {}) {
     session.appendChild(card); document.body.appendChild(session);
     return { session, card, input, row, leading, trailing, context, model, getDraft: () => draft };
   });
+  // Date shim: .now() returns the mocked clock; `new Date(at)` is only used
+  // by overlay history rows to format HH:MM labels.
+  function DateShim(at) { this.at = at ?? 0; }
+  DateShim.now = () => now;
+  DateShim.prototype.getHours = function () { return 12; };
+  DateShim.prototype.getMinutes = function () { return 34; };
   const context = vm.createContext({
     window, document, navigator: { language: "zh-CN" },
-    Date: { now: () => now },
+    Date: DateShim,
     setInterval(fn, ms) { const id = ++nextTimer; timers.set(id, { fn, ms }); return id; },
     clearInterval(id) { timers.delete(id); },
     Promise, JSON, String, Number, Object, Array, Error,
@@ -173,6 +179,7 @@ function controls(view) {
     revert: panel.querySelectorAll("button").find((n) => n.innerHTML === "恢复原稿"),
     historyToggle: panel.querySelectorAll("button").find((n) => n.innerHTML.indexOf("历史") === 0),
     historyBox: panel.querySelector(".pe-history"),
+    dirtyBadge: panel.querySelector(".pe-dirty-badge"),
     close: panel.querySelector(".pe-panel-x"),
     status: panel.querySelector(".pe-panel-status"),
   };
@@ -528,4 +535,66 @@ test("history entries are keyboard operable", async () => {
   assert.equal(item.getAttribute("tabindex"), "0");
   item.fire("keydown", { key: "Enter" });
   assert.equal(c.textarea.value, "kbd result");
+});
+
+test("history dedupes per session: the same draft in two sessions keeps both entries", async () => {
+  const h = harness({ composers: 2 });
+  const a = controls(h.views[0]);
+  const b = controls(h.views[1]);
+  h.views[1].input.__zcodeLexicalInputE2E.setText("synthetic test draft 0"); // same draft as composer 0
+  a.button.click();
+  h.generation.pending[0].resolve({ text: "from session a" });
+  await h.settle();
+  b.button.click();
+  h.generation.pending[1].resolve({ text: "from session b" });
+  await h.settle();
+  b.historyToggle.click();
+  const items = b.historyBox.querySelectorAll(".pe-history-item");
+  assert.equal(items.length, 2, "cross-session same draft does not evict");
+  assert.equal(items[0].querySelector(".pe-history-text").textContent, "from session b");
+  assert.equal(items[1].querySelector(".pe-history-text").textContent, "from session a");
+});
+
+test("session tables are capped: the oldest session's reuse cache is evicted", async () => {
+  const N = 52; // SESSION_TABLE_LIMIT is 50
+  const h = harness({ composers: N });
+  for (let i = 0; i < N; i++) {
+    const c = controls(h.views[i]);
+    c.button.click();
+    h.generation.pending[i].resolve({ text: "e" + i });
+    await h.settle();
+  }
+  const first = controls(h.views[0]);
+  first.close.click();
+  first.button.click();
+  assert.equal(h.generation.calls.length, N + 1, "session 0 evicted after 51 newer sessions; reuse falls back to generation");
+});
+
+test("dirty badge reflects hand edits", async () => {
+  const h = harness();
+  const c = controls(h.views[0]);
+  assert.equal(c.dirtyBadge.style.display, "none");
+  c.button.click();
+  h.generation.pending[0].resolve({ text: "generated" });
+  await h.settle();
+  assert.equal(c.dirtyBadge.style.display, "none", "fresh result is not dirty");
+  c.textarea.value = "edited";
+  c.textarea.fire("input");
+  assert.equal(c.dirtyBadge.style.display, "", "hand edit shows the badge");
+  c.retry.click();
+  h.generation.pending[1].resolve({ text: "regenerated" });
+  await h.settle();
+  assert.equal(c.dirtyBadge.style.display, "none", "retry clears the badge");
+});
+
+test("history rows show draft snippet and time", async () => {
+  const h = harness();
+  const c = controls(h.views[0]);
+  c.button.click();
+  h.generation.pending[0].resolve({ text: "enhanced" });
+  await h.settle();
+  c.historyToggle.click();
+  const meta = c.historyBox.querySelectorAll(".pe-history-item")[0].querySelector(".pe-history-meta");
+  assert.ok(meta.textContent.indexOf("synthetic test draft 0") >= 0, "draft preview present");
+  assert.ok(/\d{2}:\d{2}$/.test(meta.textContent), "HH:MM time present");
 });

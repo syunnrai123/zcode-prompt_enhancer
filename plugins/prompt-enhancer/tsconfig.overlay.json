@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "es2018",
+    "module": "es2020",
+    "lib": ["es2018", "dom"],
+    "rootDir": "desktop/src",
+    "outDir": "desktop",
+    "strict": true,
+    "alwaysStrict": false,
+    "noImplicitAny": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "types": [],
+    "skipLibCheck": true
+  },
+  "files": ["desktop/src/overlay.ts"]
+}

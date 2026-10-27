@@ -16,9 +16,41 @@ export const HOST_MARKER = "zcode-prompt-enhancer-host";
 export const HOST_PATCH_START = "/* zcode-prompt-enhancer-host:start */";
 export const HOST_PATCH_END = "/* zcode-prompt-enhancer-host:end */";
 
-const REGISTRATION = ".register(Kr,dt)";
-const WRAPPED_REGISTRATION = ".register(Kr,__peWrapZcodeAgentService(dt))";
-const REGISTRATION_RE = /\.register\(Kr,__peWrapZcodeAgentService\(dt\)\)/g;
+/* Registration anchors. The two identifiers are minified per ZCode release;
+ * when a ZCode update renames them, ADD the new literal here (keep old ones
+ * so remove can still undo archives patched with them). Everything else in
+ * this module derives from the list. */
+export const HOST_REGISTRATION_VARIANTS = [".register(Kr,dt)"];
+const GENERIC_REGISTRATION_RE = /\.register\((\w+),(\w+)\)/g;
+
+function wrappedOf(variant) {
+  return variant.replace(/\.register\((\w+),(\w+)\)$/, ".register($1,__peWrapZcodeAgentService($2))");
+}
+
+/** The variant the bundle uses, when exactly one occurrence exists. */
+export function hostRegistrationVariant(text) {
+  for (const variant of HOST_REGISTRATION_VARIANTS) {
+    if (typeof text === "string" && text.split(variant).length - 1 === 1) return variant;
+  }
+  return null;
+}
+
+/** Which variant an already-patched text was patched with. */
+export function hostPatchedVariant(text) {
+  if (typeof text !== "string") return null;
+  for (const variant of HOST_REGISTRATION_VARIANTS) {
+    if (text.includes(wrappedOf(variant))) return variant;
+  }
+  return null;
+}
+
+function registrationSurvey(text) {
+  const counts = new Map();
+  for (const m of typeof text === "string" ? text.matchAll(GENERIC_REGISTRATION_RE) : []) {
+    counts.set(m[0], (counts.get(m[0]) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([k, v]) => `${k} x${v}`).join(", ") || "none";
+}
 
 export function buildHostPatchSource(moduleUrl = null) {
   return (
@@ -76,26 +108,36 @@ export function buildHostPatchSource(moduleUrl = null) {
 }
 
 export function isHostPatched(text) {
-  return typeof text === "string" && text.includes(HOST_PATCH_START + "\n") && text.includes(WRAPPED_REGISTRATION);
+  return typeof text === "string" && text.includes(HOST_PATCH_START + "\n") && hostPatchedVariant(text) !== null;
 }
 
 export function stripHostPatch(text) {
   let out = text;
   const block = /\n?\/\* zcode-prompt-enhancer-host:start \*\/[\s\S]*?\/\* zcode-prompt-enhancer-host:end \*\/\n?/g;
   out = out.replace(block, "");
-  out = out.replace(REGISTRATION_RE, REGISTRATION);
+  for (const variant of HOST_REGISTRATION_VARIANTS) {
+    out = out.split(wrappedOf(variant)).join(variant);
+  }
   return out;
 }
 
 export function applyHostPatch(text, moduleUrl = null) {
   if (typeof text !== "string") throw new Error("host entry is not text");
   let out = stripHostPatch(text);
-  const matches = out.split(REGISTRATION).length - 1;
-  if (matches !== 1) {
+  const variant = hostRegistrationVariant(out);
+  if (!variant) {
+    for (const known of HOST_REGISTRATION_VARIANTS) {
+      const count = out.split(known).length - 1;
+      if (count > 1) {
+        throw new Error(`unsupported ZCode host bundle: expected exactly one ${known} registration, found ${count}`);
+      }
+    }
     throw new Error(
-      `unsupported ZCode host bundle: expected exactly one ${REGISTRATION} registration, found ${matches}`
+      `unsupported ZCode host bundle: no known .register(<class>,<service>) anchor ` +
+      `(known: ${HOST_REGISTRATION_VARIANTS.join(", ")}; register calls found: ${registrationSurvey(out)}). ` +
+      `Add the new ZCode literal to HOST_REGISTRATION_VARIANTS in desktop/host-patch.mjs.`
     );
   }
-  out = out.replace(REGISTRATION, WRAPPED_REGISTRATION) + buildHostPatchSource(moduleUrl);
+  out = out.replace(variant, wrappedOf(variant)) + buildHostPatchSource(moduleUrl);
   return out;
 }
