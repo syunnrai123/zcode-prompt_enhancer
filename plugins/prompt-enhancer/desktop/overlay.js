@@ -6,8 +6,8 @@
  *     send). Foreign nodes between React children are left alone by React;
  *     a rescan loop re-mounts anything a re-render dropped or reordered.
  *   - a preview container mounted inside the composer card below the toolbar
- *     row: streams the enhanced prompt as it is generated, stays editable,
- *     and only replaces the input draft when the user confirms.
+ *     row: displays the validated result when generation completes, stays
+ *     editable, and only replaces the input draft when the user confirms.
  *   - apply ("使用增强结果") / revert ("恢复原稿") via the composer's built-in
  *     E2E lexical bridge (__zcodeLexicalInputE2E), cancel while generating,
  *     and a watchdog so the UI can never spin forever silently.
@@ -155,6 +155,7 @@
     var state = { busy: false, dirty: false, text: "", original: "" };
     var sessionKey = sessionKeyOf(input);
     var requestId = 0;
+    var requestSequence = 0;
     var requestContext = null;
     var tick = null;
     var destroyed = false;
@@ -345,7 +346,7 @@
 
       if (activeGeneration && activeGeneration !== api) activeGeneration.cancelForNewRun();
       activeGeneration = api;
-      requestId = requestId + 1;
+      requestId = ++requestSequence;
       var myId = requestId;
       var bridge = hostBridge();
       bridge.generate(input, draft, context).then(function (result) {

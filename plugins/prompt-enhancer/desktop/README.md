@@ -2,7 +2,7 @@
 
 在 ZCode 桌面端输入框工具行注入一个 **✦ 增强按钮**：点击后读取当前草稿，直接用**当前会话选中的模型**
 生成增强结果，在输入框卡片内的**独立预览面板**中展示；点「使用增强结果」才会替换草稿，
-随后可随时「恢复原稿」。**不需要单独的 provider / API Key**——凭据由 ZCode Host 自己持有。
+随后可随时「恢复原稿」。请求携带**项目类型、技术栈、模块/路径摘要和最近 Git 改动**（按当前草稿相关性排序），不读取源码正文，不使用编辑器选区/光标上下文。结果完整校验后才展示，失败或取消时不会替换草稿。**不需要单独的 provider / API Key**——凭据由 ZCode Host 自己持有。
 
 补丁完全可逆：
 
@@ -18,9 +18,11 @@
 | `inject-main.cjs` | 主进程 | 向每个渲染窗口按依赖顺序注入下列四个脚本，记录 `loader.log` |
 | `system-prompt.generated.js` | 渲染进程 | 由 `scripts/embed-system-prompt.mjs` 生成的唯一权威增强规则 |
 | `session-context.js` | 渲染进程 | 读取已提交 composer 的当前模型选择与工作区路由（`v4-model-config` + React fiber） |
-| `host-bridge.js` | 渲染进程 | 通过 Host 的 `zcodeAgentService.__peGenerateWorkspaceText` 用当前会话模型生成；`__peCancelWorkspaceText` 真实中止 |
+| `host-bridge.js` | 渲染进程 | 将草稿和模型/工作区路由送给 Host 项目增强接口；处理取消与旧版本协议 |
 | `overlay.js` | 渲染进程 | 工具行 ✦/■ 按钮、预览面板、应用/恢复/取消；模型切换自动停止旧请求 |
-| `host-patch.mjs` | — | Host bundle 可逆补丁的 apply/strip/检测 |
+| `host-patch.mjs` | — | Host bundle 可逆补丁的 apply/strip/检测，按文件 URL 导入项目增强运行时 |
+| `dist/desktop/workspace-enhancer.js` | Host | 采集项目摘要、组装提示词、有限网络重试和完整结果校验 |
+| `dist/context/project-context.js` | Host | 有大小/时间限制的只读项目清单、目录和 Git 采集 |
 | `patch-desktop.mjs` | Node CLI | `install` / `remove` / `check` / `doctor`，纯 Node 实现 asar 双入口读写，原子替换，幂等 |
 | `install.cmd` / `uninstall.cmd` | Windows | 双击安装/卸载（自动 `cd /d`，安装器等待 ZCode 退出） |
 | `asar-lib.mjs` | — | asar 头解析/重写原语，与回环测试共享 |
@@ -50,8 +52,12 @@ npm install && npm run build          # build 会同时生成 system-prompt.gene
 node desktop\patch-desktop.mjs install            # 自动探测 app.asar；也可 --asar <路径>
 ```
 
-安装器把上述脚本复制到自包含运行时目录 `~/.zcode/zcode-prompt-enhancer/`（与插件缓存解耦）。
-`/enhance-prompt` 命令与 MCP 工具仍可选用外部 provider（`config.json` 或插件设置），与按钮无关。
+安装器把脚本及 `dist/` 复制到自包含运行时目录 `~/.zcode/zcode-prompt-enhancer/`，为 `dist/` 写入 ESM 包边界（与插件缓存解耦）。
+`/enhance-prompt` 命令与 MCP 工具仍可选用外部 provider（插件设置或环境变量），与按钮无关。
+
+项目采集最多 3 秒:Git 项目建立最多 50000 条的有界路径索引,非 Git 项目最多 8 层 / 128 目录;摘要含模块概览(≤17)与按草稿/Git 改动排序的相关路径(≤24),最终最多 6000 字符。Git 仅包含状态与最近 3 次提交/文件名,不读取 diff 正文;仓库子目录工作区路径统一相对该子目录。
+远程或不确定的工作区不会被误当作本地目录；无法采集时会在提示词中注明。模型 `selection` 仅指当前模型配置，不是编辑器选区。
+旧版安装需重新运行安装器并重启 ZCode；若 Host 协议不是新版，按钮会提示更新而不是静默丢失项目上下文。
 
 ## 使用流程
 

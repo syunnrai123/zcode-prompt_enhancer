@@ -32,7 +32,7 @@ import path from "node:path";
 import os from "node:os";
 import { execSync, spawn } from "node:child_process";
 import { waitForZCodeExit, isZCodeRunning } from "./install-state.mjs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ENTRY,
   buildInjectLine,
@@ -51,7 +51,8 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.dirname(HERE);
-const SOURCE_CLI = path.join(PLUGIN_ROOT, "dist", "cli.js");
+const SOURCE_DIST = path.join(PLUGIN_ROOT, "dist");
+const SOURCE_ENHANCER = path.join(SOURCE_DIST, "desktop", "workspace-enhancer.js");
 const SOURCE_SCRIPTS = [
   "system-prompt.generated.js",
   "session-context.js",
@@ -136,7 +137,9 @@ function copyRuntime(runtimeDir, resetConfig) {
   for (const name of SOURCE_SCRIPTS) {
     fs.copyFileSync(path.join(HERE, name), path.join(runtimeDir, name));
   }
-  fs.writeFileSync(path.join(runtimeDir, "runtime-version.json"), JSON.stringify({ version: SOURCE_VERSION, installedAt: new Date().toISOString() }, null, 2) + "\n");
+  fs.cpSync(SOURCE_DIST, path.join(runtimeDir, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(runtimeDir, "dist", "package.json"), '{"type":"module"}\n');
+  fs.writeFileSync(path.join(runtimeDir, "runtime-version.json"), JSON.stringify({ version: SOURCE_VERSION, protocol: 2, installedAt: new Date().toISOString() }, null, 2) + "\n");
   return { runtimeDir, loaderDst };
 }
 
@@ -168,12 +171,13 @@ function cmdDoctor(runtimeExplicit, asarExplicit) {
   );
   info("\n=== 2. runtime ===");
   info(`runtime: ${runtimeDir} ${fs.existsSync(runtimeDir) ? "" : "(MISSING — run install)"}`);
-  for (const f of ["inject-main.cjs", ...SOURCE_SCRIPTS, "dist/cli.js"]) {
+  for (const f of ["inject-main.cjs", ...SOURCE_SCRIPTS, "dist/desktop/workspace-enhancer.js", "dist/context/project-context.js", "dist/package.json"]) {
     info(`  ${f}: ${fs.existsSync(path.join(runtimeDir, f)) ? "ok" : "MISSING"}`);
   }
   try {
     const version = JSON.parse(fs.readFileSync(path.join(runtimeDir, "runtime-version.json"), "utf8"));
     info(`runtime version: ${version.version}${version.version !== SOURCE_VERSION ? " (outdated — run install)" : ""}`);
+    info(`project context protocol: ${version.protocol === 2 ? "2" : "legacy (run install to update)"}`);
   } catch (e) { info("runtime version: unknown / not installed"); }
   try {
     const status = JSON.parse(fs.readFileSync(path.join(runtimeDir, "install-status.json"), "utf8"));
@@ -217,7 +221,7 @@ function cmdCheck(asarPath) {
   }
   info(
     `source files: scripts ${SOURCE_SCRIPTS.every((n) => fs.existsSync(path.join(HERE, n))) ? "ok" : "MISSING"}, ` +
-    `dist ${fs.existsSync(SOURCE_CLI) ? "ok" : "MISSING (run npm run build)"}`
+    `dist ${fs.existsSync(SOURCE_ENHANCER) ? "ok" : "MISSING (run npm run build)"}`
   );
 }
 
@@ -227,6 +231,7 @@ function cmdInstall(asarPath, runtimeExplicit, resetConfig, allowRunning) {
     if (!fs.existsSync(path.join(HERE, name))) fail(`${name} missing from the desktop folder.`);
   }
 
+  if (!fs.existsSync(SOURCE_ENHANCER)) fail("Compiled project-context runtime missing; run npm run build.");
   const runtimeDir = path.resolve(
     runtimeExplicit || path.join(os.homedir(), ".zcode", "zcode-prompt-enhancer")
   );
@@ -239,7 +244,8 @@ function cmdInstall(asarPath, runtimeExplicit, resetConfig, allowRunning) {
     const currentMain = readEntryText(parsed, ENTRY);
     const currentHost = readEntryText(parsed, HOST_ENTRY);
     const nextMain = stripInjectLines(currentMain) + buildInjectLine(loaderDst);
-    const nextHost = applyHostPatch(currentHost);
+    const moduleUrl = pathToFileURL(path.join(runtimeDir, "dist", "desktop", "workspace-enhancer.js")).href;
+    const nextHost = applyHostPatch(currentHost, moduleUrl);
     changed = [];
     if (nextMain !== currentMain) changed.push(ENTRY);
     if (nextHost !== currentHost) changed.push(HOST_ENTRY);

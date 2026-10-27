@@ -1,103 +1,97 @@
-# ZCode 提示词增强插件(prompt-enhancer)
+# ZCode 提示词增强插件
 
-将草稿提示词改写为**清晰、精炼、无歧义**指令的 ZCode 插件。增强规范以「精炼优先、
-少引用具体文件」为核心契约:输出目标 ≤ 原文 1.5 倍,最多一个文件/符号锚点。
-按 ZCode 插件规范(`.zcode-plugin/plugin.json`)实现,零 npm 运行时依赖。
+把草稿改写为清晰、精炼、无歧义的指令，结合项目基本情况与最近 Git 改动。采用 ZCode 插件清单，零 npm 运行时依赖。
 
-## 激活方式
+## 入口
 
-| 方式 | 入口 | 说明 |
-| --- | --- | --- |
-| **输入框按钮** | 输入框工具行 ✦ | 桌面集成层(`desktop/`):独立预览面板流式展示,确认后才替换草稿,可一键回退。需运行一次补丁器,见 `desktop/README.md` |
-| 斜杠命令 | `/enhance-prompt <草稿>` | 见 `commands/enhance-prompt.md`。优先调用 MCP 工具,未配置 API Key 时按同一规则就地增强 |
-| 技能 | composer 技能选择器 | `skills/prompt-enhancer/SKILL.md` |
-| MCP 工具 | `enhance_prompt` | 供任意会话/技能直接调用的核心能力 |
-| CLI | `node dist/cli.js` | stdin/stdout 标记协议,桌面按钮与外部宿主共用 |
+- **桌面 ✦ 按钮**：使用当前会话模型，自动采集本地项目摘要，结果校验完成后在独立面板展示。用户确认后才写入草稿；支持停止、恢复原稿和模型切换取消。需安装桌面集成。
+- **`/enhance-prompt` 与技能**：优先调用 `enhance_prompt`，无独立 provider Key 时按同一规则就地改写。可先用 `get_project_context` 获取摘要，无 Key 也可用。
+- **MCP 工具**：`enhance_prompt`、`get_project_context`、`get_enhancer_info`、`get_enhancement_rules`。
+- **CLI**：`node dist/cli.js`，stdin JSON 支持 `prompt`、`workspacePath`、`context`；stdout 为标记协议。
 
-## 目录结构
+## 项目上下文
+
+不使用选区、光标、当前编辑文件或源码片段。`selection` 在桌面代码中仅指**模型选择**。
+
+自动采集需要明确的项目目录：桌面从当前会话读取；MCP/CLI 通过 `workspacePath` 传入。不得使用插件安装目录或进程工作目录猜测项目。
+
+采集内容(大项目优先,按当前草稿与 Git 改动排序):
+
+- **路径索引**:Git 项目建立有界索引(`ls-files`,最多 50000 条记录 / 4 MiB / 单条 1024 字符,保留完整前缀并注明截断);非 Git 项目用公平的文件系统遍历(最多 8 层 / 128 个目录 / 2048 待遍历项)。深层文件不再被浅层截断丢弃。
+- **项目概况与模块概览**:索引文件数、模块数,以及每个模块的文件数与语言分布(最多 17 个模块行,兼顾广度与热点)。
+- **相关路径**:与草稿(精确路径 > 文件名关键词,含中英映射如 登录→login)和 Git 改动最相关的最多 24 条路径。
+- **技术栈与项目类型**:从最多 16 个项目清单采样推断(根目录与改动模块优先),包括 Node.js、TypeScript、React、Vue、Python、Rust、Go、JVM、PHP 等;不是权威依赖清单。
+- **Git**:分支、工作区改动(按相关性排序,最多 40 条),最近 3 次提交标题与改动文件名。仓库子目录工作区时路径统一相对该子目录,不混入仓库根其他内容。只读元数据,不读取 diff 正文、不执行项目脚本、不拉取远程仓库。
+
+总采集预算为 **3 秒**。清单单文件不超过 16 KiB;敏感路径(`.env`、密钥、`dist`/`node_modules` 等)与符号链接在索引与摘要中一律排除。最终上下文最多 **6000 字符**,各段(概况 600 / 技术栈 / 相关路径 1100 / 模块 1000 / 目录 / Git / 说明 400)有独立预算并按槽位分配,避免长路径挤掉说明与提交摘要。缺失或截断会注明,模型不得据此虚构事实。
+
+大项目基准(`node scripts/benchmark-context.mjs`,2 万+ 文件合成索引):采集约 1.4 秒、摘要约 3.4k 字符、8 层深目标文件保留;路径选择耗时 <100ms。
+
+远程或无法确认属于本机的工作区不读取同名本地目录；目前没有已验证的远程文件采集接口，会注明上下文不可用。
+
+```json
+{
+  "prompt": "修复登录后没有跳转的问题",
+  "workspacePath": "E:/Projects/my-app"
+}
+```
+
+也可直接提供已知摘要（不同时重复采集）：
+
+```json
+{
+  "prompt": "修复登录后没有跳转的问题",
+  "context": {
+    "projectType": "web application",
+    "techStack": ["React", "TypeScript"],
+    "directoryStructure": ["src/", "src/auth/"],
+    "gitChanges": { "workingTree": ["M src/auth/session.ts"] }
+  }
+}
+```
+
+## 网络与输出安全
+
+- 正确按 SSE 事件组装多行数据，兼容换行与 UTF-8 字节拆分；按显式事件 ID 去重，不删除正常重复文字。
+- 外部 OpenAI/GLM 流要求 `finish_reason: "stop"` 与 `[DONE]`；Anthropic 要求正常 `stop_reason` 和 `message_stop`。未结束、截断、错误事件、工具调用及畸形数据不会当成成功提示词。
+- 网络重置、提前断流、HTTP 408/429/5xx 等可恢复失败最多重试一次。失败批次文本全部丢弃；重试、退避与流读取共享原始墙钟预算。认证/请求错误、超时、长度截断及非法输出不重试。
+- 完成后立即关闭流，不等连接自然断开；限制事件、响应与输出体积。统一拒绝异常 Unicode、控制字符和清理后为空的结果。
+- CLI 只在完整成功后输出 `[CONTENT_DELTA]` 分块与唯一 `[ENHANCED]`；失败只输出 `[ENHANCED_ERROR]`。桌面预览同样不展示未经验证的部分结果。
+- 桌面路径由 ZCode Host 管理底层网络；插件处理可识别的 RPC 网络错误和返回的结束/异常字段。Host 未返回结束原因时，无法从最终文本独立证明底层流的完整性。
+
+默认外部请求超时 60 秒，可设为 15–180 秒；桌面请求上界 120 秒。输出预算继续为 `min(8192, max(1024, ceil(len * 0.8)))`，封顶 **8192 tokens**。精炼契约仍为原稿约 1.5 倍、最多一个文件/符号锚点。
+
+## 结构与构建
 
 ```text
 plugins/prompt-enhancer/
-├── .zcode-plugin/plugin.json      # 清单:commands + skills + mcpServers + userConfig
-├── commands/enhance-prompt.md     # /enhance-prompt 斜杠命令(用户可见层)
-├── skills/prompt-enhancer/SKILL.md# 技能入口(composer 选择器)
-├── desktop/                       # 桌面输入框按钮(注入层 + asar 补丁器,见 desktop/README.md)
-│   ├── inject-main.cjs            #   主进程 loader:注入 overlay + 拉起增强 CLI
-│   ├── overlay.js                 #   渲染进程 overlay:按钮/预览/应用/回退
-│   ├── patch-desktop.mjs          #   install / remove / check
-│   └── asar-lib.mjs               #   asar 读写原语(与回环测试共享)
-├── src/                           # TypeScript 源码(见下节)
-├── dist/                          # 编译产物(零运行时依赖,随插件分发)
-├── test/                          # 单元测试(node:test)+ 桌面补丁回环测试
-└── scripts/smoke-test.mjs         # 端到端冒烟(MCP 握手 + CLI 协议)
+├── .zcode-plugin/plugin.json     插件/MCP/配置清单
+├── commands/ + skills/          命令与技能规则
+├── src/context/                 只读项目/Git 采集(路径索引、模块与相关性摘要)
+├── scripts/benchmark-context.mjs# 大项目采集基准(合成 2 万+ 文件索引)
+├── src/core/                    类型、组装、规则与输出校验
+├── src/desktop/                 Host 项目增强编排
+├── src/strategies/              GLM/OpenAI/Anthropic/mock + SSE
+├── src/mcp/                     JSON-RPC 分发与 stdio
+├── desktop/                     注入脚本与可逆 asar 安装器
+├── dist/                        随插件分发的编译产物
+└── test/ + scripts/             回归与进程级冒烟
 ```
-
-## 架构与模块划分
-
-分层依赖方向自上而下,`core` 不依赖任何基础设施:
-
-```text
-desktop/overlay.js + commands/enhance-prompt.md   用户层:输入框按钮 / 命令面板
-        │
-desktop/inject-main.cjs → dist/cli.js (标记协议)  接入层:流式桥接
-mcp/server.ts                                     接入层:MCP 工具注册与 JSON-RPC 分发
-        │
-core/enhancer.ts             编排层:校验→组装→选策略→调用→守卫输出
-        ├─ core/prompt-builder.ts   纯函数:草稿+上下文 → 完整提示词(分段预算,紧凑化)
-        ├─ core/output-guard.ts     纯函数:清洗围栏/前缀/解释尾巴
-        └─ core/system-prompt.ts    规范单一来源(精炼契约/文件引用政策/输出规则)
-        │
-strategies/*                 策略层:glm | openai-compatible | anthropic | mock
-config/config.ts             配置层:env + ZCode userConfig / config.json 解析
-index.ts                     组合根:唯一知道拼装方式的文件
-```
-
-### 关键决策
-
-- **精炼契约**:`system-prompt.ts` 强制 ≤1.5x 长度、最多一个文件锚点、禁止填充话术;
-  上下文预算同步收紧(选区 1500 / 光标 800 / 当前文件 2000 / 关联文件 1200,
-  关联文件超 300 字符只传路径),更少输入 token、更快的首 token、更精炼的输出。
-- **max_tokens 按输入伸缩**:`min(8192, max(1024, len*0.8))`——按 CJK 最坏情形覆盖
-  「轻度润色不改写」的输出上限,同时防止模型越写越长。
-- **流式体验**:CLI `[CONTENT_DELTA]` 标记逐段回传,桌面预览面板边生成边显示,
-  用户感知延迟 ≈ 首 token 时间。
-- **超时为真·墙钟预算**:15–180s 钳位,覆盖建连、响应头与**流式 body 全程**——provider 停发数据也会被中止并报 `PROVIDER_TIMEOUT`,不会挂死。
-- **冷启动单次重试**:已有内容落地后不再重试,避免重复输出;**超时不重试**(重试会使等待翻倍,超出墙钟语义)。
-- **Anthropic 关闭 thinking**:防止推理模型把 token 预算花在 thinking 块上导致正文为空。
-- **桌面层可逆**:app.asar 只追加/剥离一行注入;`remove` 后归档内容与官方一致,
-  回环测试按字节验证。
-
-## 开发
 
 ```bash
 cd plugins/prompt-enhancer
-npm install        # 仅 devDependencies(typescript、@types/node)
-npm run build      # tsc → dist/,并同步 system-prompt.generated.js 与 overlay 版本号
-npm test           # 71 个测试:管线单测 + 超时回归 + asar 补丁回环
-npm run smoke      # 进程级端到端:MCP 握手 + CLI 标记协议 + 版本/生成物一致性校验
+npm install
+npm run build
+npm test
+npm run smoke
 ```
 
-版本号以 `package.json` 为单一来源:MCP `serverInfo.version` 运行时读取 manifest;
-`overlay.js` 的 `VERSION` 由构建脚本盖章;`smoke` 校验三者与
-`system-prompt.generated.js` 一致,可在发布前拦截「改了源码忘记 build」的漂移。
+构建同步系统规则与 overlay 版本。`dist/` 入库分发，源码修改后必须重建。测试覆盖项目采集、网络故障、原子输出、取消和 asar 双入口回环；网络测试只连接本机模拟服务，不调用真实付费模型。
 
-本地无密钥冒烟:设置 `PROMPT_ENHANCER_PROVIDER=mock`。
+## 配置与安装
 
-## 配置(ZCode userConfig,装后可改;桌面按钮另读 config.json)
+外部 provider 在 ZCode 插件设置或环境变量中配置：`provider` 默认 `glm`；Key 可回退到 `ZAI_API_KEY`、`OPENAI_API_KEY` 或 `ANTHROPIC_API_KEY`；支持自定义 `base_url`、`model` 和 `timeout_seconds`。桌面按钮复用当前会话模型，不读独立 Key 或 `config.json`。
 
-| 键 | 默认 | 说明 |
-| --- | --- | --- |
-| provider | `glm` | `glm` / `openai-compatible` / `anthropic` / `mock`;留空自动探测可用密钥 |
-| api_key | 空 | 留空则读环境变量 `ZAI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` |
-| base_url | 空 | 各提供方官方默认 |
-| model | 空 | glm→`glm-4.6`,openai→`gpt-4o-mini`,anthropic→`claude-sonnet-4-5` |
-| timeout_seconds | 60 | 单次增强墙钟超时(15–180 钳位,覆盖建连到流式结束) |
+桌面集成更新需在 ZCode 退出后重新运行 `desktop/install.cmd`，或用 `node desktop/patch-desktop.mjs install --after-exit` 等待退出。本次新增 Host 项目上下文运行时，单独复制 renderer 文件不够。安装会复制 `dist/` 并建立 ESM 包边界，更新双入口补丁。
 
-未配置任何密钥时,`/enhance-prompt` 自动降级为**就地增强**:命令 Markdown 内嵌与
-`system-prompt.ts` 完全一致的规则(也可通过 `get_enhancement_rules` 工具取原文),
-保证功能永不因缺配置而不可用。
-
-## 卸载还原
-
-1. `node desktop/patch-desktop.mjs remove --purge`(ZCode 退出后执行)→ app.asar 回到官方内容。
-2. ZCode **设置 → 插件** 卸载本插件。官方升级 ZCode 也会自动覆盖为官方 app.asar。
+卸载：ZCode 退出后运行 `node desktop/patch-desktop.mjs remove --purge`，再在设置中卸载插件。安装器与卸载器用合成归档测试，不会在测试时改写实际应用。

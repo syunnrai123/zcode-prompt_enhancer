@@ -4,36 +4,27 @@
  * core enhancement pipeline is unit-testable in isolation.
  */
 
-/** Position of the user's cursor in the file being edited (1-based line). */
-export interface CursorPosition {
-  readonly line: number;
-  readonly column?: number;
-}
-
-/** A file the enhancer may use as reference material. */
-export interface FileContext {
-  readonly path: string;
-  readonly language?: string;
-  readonly content?: string;
-}
-
-/** Editor context collected by the caller (ZCode agent or IDE integration). */
-export interface EditorContext {
-  /** Code the user currently has selected (wins over cursorContext). */
-  readonly selectedCode?: string;
-  /** Lines around the cursor; only used when nothing is selected. */
-  readonly cursorContext?: string;
-  readonly cursorPosition?: CursorPosition;
-  readonly currentFile?: FileContext;
-  readonly relatedFiles?: readonly FileContext[];
+/** Bounded project metadata; no source-code bodies or editor state. */
+export interface ProjectContext {
   readonly projectType?: string;
+  readonly techStack?: readonly string[];
+  readonly projectOverview?: string;
+  readonly modules?: readonly string[];
+  readonly relevantPaths?: readonly string[];
+  readonly directoryStructure?: readonly string[];
+  readonly gitChanges?: {
+    readonly branch?: string;
+    readonly workingTree?: readonly string[];
+    readonly recentCommits?: readonly string[];
+  };
+  readonly notes?: readonly string[];
 }
 
 /** One enhancement request flowing through the pipeline. */
 export interface EnhanceRequest {
   /** The raw draft prompt typed by the user. Must be non-empty. */
   readonly prompt: string;
-  readonly context?: EditorContext;
+  readonly context?: ProjectContext;
 }
 
 /** Successful enhancement result. */

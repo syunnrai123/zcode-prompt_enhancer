@@ -7,7 +7,7 @@
  */
 import { EnhancerError } from './types.js';
 import { buildFullPrompt } from './prompt-builder.js';
-import { cleanEnhancedOutput } from './output-guard.js';
+import { validateEnhancedOutput } from './output-guard.js';
 export class PromptEnhancerService {
     registry;
     config;
@@ -40,12 +40,9 @@ export class PromptEnhancerService {
             });
             throw error;
         }
-        const guarded = cleanEnhancedOutput(result.enhancedPrompt);
+        const guarded = validateEnhancedOutput(result.enhancedPrompt);
         if (guarded.modified) {
             this.onEvent({ type: 'output:guarded', provider: strategy.id });
-        }
-        if (!guarded.text) {
-            throw new EnhancerError('EMPTY_RESPONSE', 'Enhancement produced empty output after cleaning.');
         }
         this.onEvent({ type: 'enhance:end', provider: strategy.id, model: result.model });
         return { ...result, enhancedPrompt: guarded.text };

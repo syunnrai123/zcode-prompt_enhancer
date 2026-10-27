@@ -1,32 +1,66 @@
+/** Shared, bounded HTTP/SSE transport for the streaming provider strategies. */
+import { EnhancerError } from '../core/types.js';
+export declare const STREAM_LIMITS: {
+    readonly eventChars: number;
+    readonly responseBytes: number;
+    readonly outputChars: number;
+    readonly errorBodyBytes: 4096;
+    readonly eventIds: 4096;
+};
 export interface SseRequest {
     readonly url: string;
     readonly headers: Record<string, string>;
     readonly body: unknown;
     readonly timeoutMs: number;
 }
+export interface SseEvent {
+    readonly type: string;
+    /** Only an explicit id on this event, not an inherited EventSource last-event-id. */
+    readonly id?: string;
+}
 export interface SseCallbacks {
-    /** Called once per `data:` chunk with the raw JSON payload string. */
-    onData(payload: string): void;
-    /** Called with the raw `[DONE]` sentinel. */
+    /** One complete SSE event, with multiline data joined by a newline. */
+    onData(payload: string, event?: SseEvent): void | 'stop';
+    /** The OpenAI [DONE] sentinel. Returning normally ends and cancels the stream. */
     onDone(): void;
 }
+/** Keep the public error codes stable, but distinguish transient failures internally. */
+export declare class ProviderUnavailableError extends EnhancerError {
+    readonly retryable: boolean;
+    readonly status?: number;
+    readonly retryAfterMs: number;
+    constructor(message: string, options: {
+        retryable: boolean;
+        status?: number;
+        retryAfterMs?: number;
+        cause?: unknown;
+    });
+}
 /**
- * POST the request and parse a streaming SSE response. The timeout is a
- * WALL-CLOCK budget over the whole exchange: headers AND the streamed body.
- * The AbortController stays armed until the stream has been fully consumed,
- * so a provider that sends headers and then stalls cannot hang the caller.
- * Uses the injection parameter `fetchImpl` so tests can stub the network
- * entirely.
+ * The timer covers headers, error details, and the streamed body. Native fetch
+ * receives the same abort signal; the abort race also makes injected fetches and
+ * streams obey it. Providers validate semantic completion in their callbacks.
  */
 export declare function postSse(req: SseRequest, callbacks: SseCallbacks, fetchImpl?: typeof fetch): Promise<void>;
+export declare function isTransientStatus(status: number): boolean;
+/** JSON comments/keep-alives belong in SSE comments or typed ping events, not malformed data. */
+export declare function parseSsePayload(payload: string): Record<string, unknown>;
+export declare function isRecord(value: unknown): value is Record<string, unknown>;
+/** Errors delivered after HTTP 200 still fail the entire private attempt. */
+export declare function streamedProviderError(provider: string, value: unknown): ProviderUnavailableError;
 export declare function errorMessage(error: unknown): string;
 export declare function truncate(text: string, maxLength: number): string;
+export interface RetryOptions {
+    /** One original wall-clock budget, shared by both attempts and any backoff. */
+    readonly timeoutMs?: number;
+    readonly retryDelayMs?: number;
+    /** Clock/sleep injection keeps deadline/backoff tests deterministic. */
+    readonly now?: () => number;
+    readonly sleep?: (ms: number) => Promise<void>;
+}
 /**
- * Retry-once wrapper for idempotent streaming calls that fail before any
- * content was received. Once deltas have flushed, retrying would duplicate
- * partial output, so only cold-start failures (connection refused, TLS
- * handshake, first-byte errors) get a second attempt. Timeouts are never
- * retried: a second attempt would double the caller's wall-clock wait beyond
- * the configured hard timeout.
+ * At most one retry, only for explicitly transient failures. The second argument
+ * retains the old cold-start API for callers that publish deltas. Buffered
+ * providers pass false and create fresh text/parser state inside each run.
  */
-export declare function withColdStartRetry<T>(run: () => Promise<T>, hasReceivedContent: () => boolean): Promise<T>;
+export declare function withColdStartRetry<T>(run: (remainingMs: number) => Promise<T>, hasPublishedContent: () => boolean, options?: RetryOptions): Promise<T>;

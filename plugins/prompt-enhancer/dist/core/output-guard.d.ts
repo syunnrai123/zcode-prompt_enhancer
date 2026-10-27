@@ -10,4 +10,5 @@ export interface GuardResult {
     readonly text: string;
     readonly modified: boolean;
 }
+export declare function validateEnhancedOutput(raw: unknown): GuardResult;
 export declare function cleanEnhancedOutput(raw: string): GuardResult;

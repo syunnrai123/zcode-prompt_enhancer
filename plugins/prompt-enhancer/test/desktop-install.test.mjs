@@ -53,7 +53,7 @@ test("installer patches main and host, then remove restores both entries", (t) =
   assert.match(install, /patched out\/main\/index\.js, out\/host\/index\.js/);
   assert.ok(readEntryTextFrom(asar, ENTRY).includes("zcode-prompt-enhancer"));
   assert.ok(isHostPatched(readEntryTextFrom(asar, HOST_ENTRY)));
-  for (const name of ["inject-main.cjs", "system-prompt.generated.js", "session-context.js", "host-bridge.js", "overlay.js"]) {
+  for (const name of ["inject-main.cjs", "system-prompt.generated.js", "session-context.js", "host-bridge.js", "overlay.js", "dist/desktop/workspace-enhancer.js", "dist/context/project-context.js", "dist/package.json"]) {
     assert.ok(fs.existsSync(path.join(runtime, name)), name + " copied");
   }
   assert.equal(typeof JSON.parse(fs.readFileSync(path.join(runtime, "runtime-version.json"), "utf8")).version, "string");

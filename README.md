@@ -36,6 +36,8 @@ ZCode 提示词增强插件。仓库根目录本身即插件市场(Git 源只识
 4. 配置（可选）：输入栏增强直接复用**当前会话模型**，无需任何 Key。仅 `/enhance-prompt` 命令和 MCP 工具在需要独立服务时才配置 provider / API Key。
    `node desktop\patch-desktop.mjs doctor` 可查看 main/host 注入状态与运行时版本。
 
+增强时使用项目类型、技术栈、模块/路径摘要（按草稿与 Git 改动排序）和最近 Git 概要，不使用编辑器选区/光标。网络断流不会输出半截结果，可恢复失败最多重试一次。详见[项目上下文与网络边界](plugins/prompt-enhancer/README.md)。更新后需重新安装桌面集成并重启，以加载新的 Host 项目采集运行时。
+
 ## 卸载还原官方状态
 
 1. 完全退出 ZCode 后双击 `plugins\prompt-enhancer\desktop\uninstall.cmd`

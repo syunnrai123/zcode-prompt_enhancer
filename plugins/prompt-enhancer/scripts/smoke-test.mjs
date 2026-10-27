@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(root, '..');
@@ -66,7 +67,7 @@ async function smokeMcp() {
     send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
     await waitForReply();
     const tools = replies[1].result.tools.map((t) => t.name);
-    assert.deepEqual(tools, ['enhance_prompt', 'get_enhancer_info', 'get_enhancement_rules']);
+    assert.deepEqual(tools, ['enhance_prompt', 'get_project_context', 'get_enhancer_info', 'get_enhancement_rules']);
 
     send({
       jsonrpc: '2.0',
@@ -90,19 +91,22 @@ async function smokeMcp() {
   }
 }
 
-function runCli(payload) {
+function runCli(payload, overrides = {}, allowFailure = false) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(pluginRoot, 'dist', 'cli.js')], {
-      env,
+      env: { ...env, ...overrides },
       stdio: ['pipe', 'pipe', 'inherit'],
+      timeout: 10_000,
     });
+    child.on('error', reject);
     let out = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
       out += chunk;
     });
     child.on('close', (code) => {
-      code === 0 ? resolve(out) : reject(new Error(`cli exited with ${code}`));
+      if (allowFailure) resolve({ out, code });
+      else code === 0 ? resolve(out) : reject(new Error(`cli exited with ${code}`));
     });
     child.stdin.write(JSON.stringify(payload));
     child.stdin.end();
@@ -119,6 +123,9 @@ async function smokeCli() {
   assert.ok(wire.includes('{{NEWLINE}}'), 'newlines encoded as {{NEWLINE}} on the wire');
   const text = wire.replace(/\{\{NEWLINE\}\}/g, '\n');
   assert.ok(text.includes('重构这段代码'), 'draft preserved in the enhanced output');
+  const chunks = out.split('\n').filter((line) => line.startsWith('[CONTENT_DELTA] '))
+    .map((line) => JSON.parse(line.slice('[CONTENT_DELTA] '.length))).join('');
+  assert.equal(chunks, text, 'validated chunks reconstruct the final result exactly once');
   console.log('[smoke] CLI path OK ([CONTENT_DELTA] + [ENHANCED] markers)');
 }
 
@@ -130,6 +137,43 @@ async function smokeCliEmptyDraft() {
     'empty draft yields exactly one [ENHANCED] marker (no [ENHANCED_ERROR], no retry)',
   );
   console.log('[smoke] CLI empty-draft path OK (single [ENHANCED] marker)');
+}
+
+async function smokeProjectContext() {
+  const out = await runCli({ prompt: '改善提示词增强', workspacePath: pluginRoot });
+  assert.match(out, /\[Project Type\]/);
+  assert.match(out, /TypeScript/);
+  assert.match(out, /\[Directory Structure\]/);
+  assert.match(out, /\[Recent Git Changes\]/);
+  assert.doesNotMatch(out, /\[User Selected Code\]|\[Code Around Cursor\]/);
+  console.log('[smoke] project context OK (manifests, directories, Git; no editor state)');
+}
+
+async function smokeCliInterruptedStream() {
+  let attempts = 0;
+  const server = createServer((request, response) => {
+    request.resume();
+    attempts++;
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'DO_NOT_PUBLISH_PARTIAL' } }] })}\n\n`);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    const { out, code } = await runCli({ prompt: 'draft' }, {
+      PROMPT_ENHANCER_PROVIDER: 'openai-compatible',
+      PROMPT_ENHANCER_API_KEY: 'loopback-test-key',
+      PROMPT_ENHANCER_BASE_URL: `http://127.0.0.1:${port}/v1`,
+    }, true);
+    assert.equal(code, 1);
+    assert.equal(attempts, 2, 'one retry for incomplete private stream');
+    assert.equal(out.trim().split('\n').length, 1);
+    assert.match(out, /^\[ENHANCED_ERROR\]/);
+    assert.doesNotMatch(out, /CONTENT_DELTA|DO_NOT_PUBLISH_PARTIAL|\[ENHANCED\]/);
+    console.log('[smoke] interrupted stream OK (one retry, error-only CLI output)');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 }
 
 async function smokeConsistency(serverInfo) {
@@ -159,6 +203,8 @@ try {
   const serverInfo = await smokeMcp();
   await smokeCli();
   await smokeCliEmptyDraft();
+  await smokeProjectContext();
+  await smokeCliInterruptedStream();
   await smokeConsistency(serverInfo);
   console.log('[smoke] ALL PASS');
 } catch (error) {

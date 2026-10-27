@@ -20,7 +20,7 @@ const REGISTRATION = ".register(Kr,dt)";
 const WRAPPED_REGISTRATION = ".register(Kr,__peWrapZcodeAgentService(dt))";
 const REGISTRATION_RE = /\.register\(Kr,__peWrapZcodeAgentService\(dt\)\)/g;
 
-export function buildHostPatchSource() {
+export function buildHostPatchSource(moduleUrl = null) {
   return (
     "\n" + HOST_PATCH_START + "\n" +
     "function __peWrapZcodeAgentService(service) {\n" +
@@ -40,10 +40,19 @@ export function buildHostPatchSource() {
     "    });\n" +
     "    delete args.operationId;\n" +
     "    try {\n" +
-    "      var result = await service.generateWorkspaceText(args);\n" +
-    "      return Object.assign({}, result, { operationId: operationId });\n" +
+    "      var result;\n" +
+    "      if (typeof params.draft === \"string\") {\n" +
+    "        var moduleUrl = " + JSON.stringify(moduleUrl) + ";\n" +
+    "        if (!moduleUrl) throw new Error(\"Project context runtime unavailable; reinstall desktop integration\");\n" +
+    "        var enhancer = await import(moduleUrl);\n" +
+    "        if (controller.signal.aborted) throw new Error(\"Prompt enhancement cancelled\");\n" +
+    "        result = await enhancer.enhanceWorkspaceText(service, args);\n" +
+    "      } else {\n" +
+    "        result = await service.generateWorkspaceText(args);\n" +
+    "      }\n" +
+    "      return Object.assign({}, result, { operationId: operationId, promptEnhancerProtocol: 2 });\n" +
     "    } finally {\n" +
-    "      controllers.delete(operationId);\n" +
+    "      if (controllers.get(operationId) === controller) controllers.delete(operationId);\n" +
     "    }\n" +
     "  };\n" +
     "  var cancel = function (params) {\n" +
@@ -78,7 +87,7 @@ export function stripHostPatch(text) {
   return out;
 }
 
-export function applyHostPatch(text) {
+export function applyHostPatch(text, moduleUrl = null) {
   if (typeof text !== "string") throw new Error("host entry is not text");
   let out = stripHostPatch(text);
   const matches = out.split(REGISTRATION).length - 1;
@@ -87,6 +96,6 @@ export function applyHostPatch(text) {
       `unsupported ZCode host bundle: expected exactly one ${REGISTRATION} registration, found ${matches}`
     );
   }
-  out = out.replace(REGISTRATION, WRAPPED_REGISTRATION) + buildHostPatchSource();
+  out = out.replace(REGISTRATION, WRAPPED_REGISTRATION) + buildHostPatchSource(moduleUrl);
   return out;
 }

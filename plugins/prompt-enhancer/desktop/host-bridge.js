@@ -21,19 +21,6 @@
     return window.__peGetHostService(input);
   }
 
-  function systemPrompt() {
-    var prompt = window.__PE_SYSTEM_PROMPT;
-    if (typeof prompt !== "string" || !prompt.trim()) throw new Error("增强规则未加载，请重新安装桌面集成");
-    return prompt;
-  }
-
-  /* Mirrors computeMaxTokens in src/core/prompt-builder.ts — keep the two in
-   * sync (floor 1024, 0.8 chars→tokens, ceiling 8192). */
-  function maxTokensFor(text) {
-    var len = Number.isFinite(text.length) && text.length > 0 ? Math.ceil(text.length) : 0;
-    return Math.min(8192, Math.max(1024, Math.ceil(len * 0.8)));
-  }
-
   function operationId() {
     return "pe-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   }
@@ -65,24 +52,27 @@
         return Promise.reject(new Error("桌面集成版本不匹配（Host 增强接口未启用），请重新运行 desktop/install.cmd 并重启 ZCode"));
       }
       var id = operationId();
-      var fullPrompt = "Please optimize the following prompt:\n\n" + draft;
-      current = { id: id, agent: agent, cancelled: false };
+      var run = { id: id, agent: agent, cancelled: false };
+      current = run;
       var args = {
         operationId: id,
+        draft: draft,
         workspacePath: context.workspacePath,
         selection: context.selection,
-        querySource: "prompt_enhancer",
-        maxOutputTokens: maxTokensFor(draft)
+        querySource: "prompt_enhancer"
       };
       if (context.workspaceIdentity) args.workspaceIdentity = context.workspaceIdentity;
       if (context.remoteSessionId) args.remoteSessionId = context.remoteSessionId;
-      args.messages = [
-        { role: "system", content: systemPrompt() },
-        { role: "user", content: fullPrompt }
-      ];
-      return agent.__peGenerateWorkspaceText(args).then(function (result) {
+      return Promise.resolve().then(function () {
+        if (run.cancelled) throw new Error("提示词增强已取消");
+        return agent.__peGenerateWorkspaceText(args);
+      }).then(function (result) {
         if (current && current.id === id) current = null;
-        if (!result || typeof result.text !== "string" || !result.text.trim()) {
+        if (run.cancelled) throw new Error("提示词增强已取消");
+        if (!result || result.promptEnhancerProtocol !== 2) {
+          throw new Error("桌面集成需要更新（项目上下文接口未启用），请重新运行 desktop/install.cmd 并重启 ZCode");
+        }
+        if (typeof result.text !== "string" || !result.text.trim()) {
           throw new Error("当前会话模型返回了空结果");
         }
         return {

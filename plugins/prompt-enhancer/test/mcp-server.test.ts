@@ -29,10 +29,10 @@ describe('MCP dispatch', () => {
     assert.equal(result.serverInfo.name, 'prompt-enhancer');
   });
 
-  it('lists the three tools with schemas', async () => {
+  it('lists all four tools with project-only schemas', async () => {
     const reply = await handleMessage(msg('tools/list'), deps());
     const tools = (reply!.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
-    assert.deepEqual(tools, ['enhance_prompt', 'get_enhancer_info', 'get_enhancement_rules']);
+    assert.deepEqual(tools, ['enhance_prompt', 'get_project_context', 'get_enhancer_info', 'get_enhancement_rules']);
   });
 
   it('calls enhance_prompt and returns content blocks', async () => {
@@ -47,6 +47,30 @@ describe('MCP dispatch', () => {
     assert.equal(result.isError, undefined);
     assert.ok(result.content[0]!.text.startsWith('[mock-enhanced]'));
     assert.match(result.content[1]!.text, /provider=mock/);
+  });
+
+  it('drops legacy editor state before invoking the enhancer', async () => {
+    const reply = await handleMessage(msg('tools/call', { name: 'enhance_prompt', arguments: {
+      prompt: 'review auth', context: {
+        techStack: ['React'], directoryStructure: ['src/auth/'],
+        gitChanges: { workingTree: ['M src/auth/session.ts'] },
+        selectedCode: 'EDITOR_SECRET', cursorContext: 'EDITOR_SECRET',
+        currentFile: { content: 'EDITOR_SECRET' },
+      },
+    } }), deps());
+    const text = (reply!.result as { content: Array<{ text: string }> }).content[0]!.text;
+    assert.ok(text.includes('React'));
+    assert.ok(text.includes('[Recent Git Changes]'));
+    assert.ok(!text.includes('EDITOR_SECRET'));
+  });
+
+  it('gets project metadata without a configured provider and rejects unspecified roots', async () => {
+    const reply = await handleMessage(msg('tools/call', { name: 'get_project_context', arguments: {} }), deps());
+    assert.equal((reply!.result as { isError?: boolean }).isError, true);
+    const info = await handleMessage(msg('tools/call', { name: 'get_project_context', arguments: { workspacePath: '/pe-definitely-missing' } }), deps());
+    const result = info!.result as { isError?: boolean; content: Array<{ text: string }> };
+    assert.equal(result.isError, undefined);
+    assert.match(result.content[0]!.text, /Project directory is unavailable/);
   });
 
   it('reports tool-level errors with isError instead of a protocol error', async () => {

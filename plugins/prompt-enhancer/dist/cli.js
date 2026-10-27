@@ -3,14 +3,15 @@
  *
  *   echo '{"prompt":"...", "context":{...}}' | node dist/cli.js
  *
- *   [CONTENT_DELTA] <json-string>  — progressive chunk (one per SSE delta)
+ *   [CONTENT_DELTA] <json-string>  — chunks of the validated final result
  *   [ENHANCED]<text>               — final success (newlines as {{NEWLINE}})
  *   [ENHANCED_ERROR]<msg>          — final failure
  *
- * The desktop input-box integration drives this protocol, streaming results
- * back into its preview panel as the provider responds.
+ * Optional workspacePath collects bounded project/Git metadata. Unvalidated
+ * provider chunks are never emitted; desktop generation uses the Host instead.
  */
 import { buildContainer, Tokens } from './index.js';
+import { resolveProjectContext } from './context/project-context.js';
 async function readStdin() {
     return new Promise((resolve, reject) => {
         let data = '';
@@ -71,11 +72,10 @@ async function main() {
         }
         const container = buildContainer();
         const enhancer = container.resolve(Tokens.Enhancer);
+        const workspacePath = typeof input.workspacePath === 'string' ? input.workspacePath : undefined;
         const result = await enhancer.enhance({
             prompt,
-            context: (typeof input.context === 'object' && input.context !== null
-                ? input.context
-                : undefined),
+            context: await resolveProjectContext(workspacePath, input.context, prompt),
         });
         streamResult(result.enhancedPrompt);
         process.stdout.write(`[ENHANCED]${result.enhancedPrompt.replace(/\n/g, '{{NEWLINE}}')}\n`);

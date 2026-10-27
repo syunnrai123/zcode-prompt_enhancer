@@ -1,7 +1,20 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { cleanEnhancedOutput } from '../src/core/output-guard.js';
+import { cleanEnhancedOutput, validateEnhancedOutput } from '../src/core/output-guard.js';
+
+describe('validateEnhancedOutput', () => {
+  it('rejects corrupted Unicode, control bytes, non-text and oversized output', () => {
+    for (const invalid of ['broken\ufffd', 'x\ud800', 'x\udc00', 'x\x00', 'x'.repeat(128 * 1024 + 1), null, 123]) {
+      assert.throws(() => validateEnhancedOutput(invalid), /Provider output/);
+    }
+    assert.throws(() => validateEnhancedOutput('```\n\n```'), /empty output/);
+  });
+
+  it('keeps valid Chinese, emoji and line breaks intact', () => {
+    assert.equal(validateEnhancedOutput('修复登录 🚀\n保留行为').text, '修复登录 🚀\n保留行为');
+  });
+});
 
 describe('cleanEnhancedOutput', () => {
   it('keeps clean output untouched', () => {
@@ -22,9 +35,16 @@ describe('cleanEnhancedOutput', () => {
     assert.equal(cleanEnhancedOutput('优化后的提示词:做这件事').text, '做这件事');
   });
 
+  it('does not strip legitimate instructions beginning with label-like words', () => {
+    for (const prompt of ['优化后端性能，保持 API 行为不变。', '增强结果缓存以减少重复请求。', 'Describe why this should remain unchanged.']) {
+      assert.equal(cleanEnhancedOutput(prompt).text, prompt);
+    }
+  });
+
   it('removes trailing explanation lines', () => {
     const result = cleanEnhancedOutput('do the thing\n\nHope this helps!');
     assert.equal(result.text, 'do the thing');
+    assert.equal(cleanEnhancedOutput('完成任务\n---\n以上就是优化结果').text, '完成任务');
   });
 
   it('unwraps a single-line fully-quoted string', () => {

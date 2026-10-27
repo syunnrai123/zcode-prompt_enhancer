@@ -6,7 +6,8 @@
  * Tool results use MCP content blocks; failures inside a tool set `isError`
  * rather than a protocol error, matching how ZCode surfaces tool failures.
  */
-import type { EnhanceRequest, EditorContext } from '../core/types.js';
+import type { EnhanceRequest } from '../core/types.js';
+import { resolveProjectContext } from '../context/project-context.js';
 import { EnhancerError } from '../core/types.js';
 import { ENHANCE_SYSTEM_PROMPT } from '../core/system-prompt.js';
 import type { PromptEnhancerService } from '../core/enhancer.js';
@@ -38,37 +39,52 @@ export const TOOLS: readonly McpTool[] = [
   {
     name: 'enhance_prompt',
     description:
-      'Rewrite a draft prompt into a clear, CONCISE, unambiguous instruction (≤1.5x the original length, at most one file/symbol anchor), optionally using editor context (selected code, current file, related files, project type). Returns ONLY the enhanced prompt text, in the same language as the draft. Pure text transformation — never executes tools.',
+      'Rewrite a draft prompt into a clear, CONCISE, unambiguous instruction (≤1.5x the original length, at most one file/symbol anchor). Uses bounded project basics and recent Git changes from workspacePath when supplied, or explicit project metadata. Returns the enhanced prompt in the same language as the draft; never executes the task described in it.',
     inputSchema: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'The raw draft prompt typed by the user.' },
+        workspacePath: {
+          type: 'string',
+          description: 'Explicit project root; the plugin reads manifests, bounded path indexes/module summaries, and Git metadata. Omit when the project is not accessible to this server.',
+        },
         context: {
           type: 'object',
-          description: 'Optional editor context for resolving vague references.',
+          additionalProperties: false,
+          description: 'Optional project metadata, never editor state or file bodies.',
           properties: {
-            selectedCode: { type: 'string' },
-            cursorContext: { type: 'string' },
-            currentFile: {
-              type: 'object',
-              properties: {
-                path: { type: 'string' },
-                language: { type: 'string' },
-                content: { type: 'string' },
-              },
-            },
-            relatedFiles: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: { path: { type: 'string' }, language: { type: 'string' }, content: { type: 'string' } },
-              },
-            },
             projectType: { type: 'string' },
+            techStack: { type: 'array', items: { type: 'string' } },
+            projectOverview: { type: 'string' },
+            modules: { type: 'array', items: { type: 'string' } },
+            relevantPaths: { type: 'array', items: { type: 'string' } },
+            directoryStructure: { type: 'array', items: { type: 'string' } },
+            gitChanges: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                branch: { type: 'string' },
+                workingTree: { type: 'array', items: { type: 'string' } },
+                recentCommits: { type: 'array', items: { type: 'string' } },
+              },
+            },
+            notes: { type: 'array', items: { type: 'string' } },
           },
         },
       },
       required: ['prompt'],
+    },
+  },
+  {
+    name: 'get_project_context',
+    description: 'Read-only bounded project overview: type, tech stack, module distribution, representative directories, draft/change-relevant paths and recent Git changes. Reads no source bodies or secret files; works without a provider API key.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspacePath: { type: 'string', description: 'Explicit project directory accessible to this server.' },
+        prompt: { type: 'string', description: 'Optional draft used to prioritize matching modules and paths.' },
+      },
+      required: ['workspacePath'],
     },
   },
   {
@@ -126,7 +142,7 @@ async function handleToolCall(params: unknown, deps: McpDeps): Promise<unknown> 
   try {
     switch (name) {
       case 'enhance_prompt': {
-        const request = parseEnhanceArgs(args);
+        const request = await parseEnhanceArgs(args);
         const result = await deps.enhancer.enhance(request);
         return {
           content: [
@@ -141,6 +157,13 @@ async function handleToolCall(params: unknown, deps: McpDeps): Promise<unknown> 
           ],
         };
       }
+      case 'get_project_context': {
+        const workspacePath = typeof args?.workspacePath === 'string' ? args.workspacePath.trim() : '';
+        if (!workspacePath) return toolError('workspacePath is required; no directory was read.');
+        const prompt = typeof args?.prompt === 'string' ? args.prompt : '';
+        const context = await resolveProjectContext(workspacePath, undefined, prompt);
+        return { content: [{ type: 'text', text: JSON.stringify(context, null, 2) }] };
+      }
       case 'get_enhancer_info':
         return { content: [{ type: 'text', text: JSON.stringify(deps.enhancer.describe(), null, 2) }] };
       case 'get_enhancement_rules':
@@ -153,40 +176,11 @@ async function handleToolCall(params: unknown, deps: McpDeps): Promise<unknown> 
   }
 }
 
-function parseEnhanceArgs(args: Record<string, unknown> | undefined): EnhanceRequest {
+async function parseEnhanceArgs(args: Record<string, unknown> | undefined): Promise<EnhanceRequest> {
   const prompt = typeof args?.prompt === 'string' ? args.prompt : '';
-  const rawContext = args?.context;
-  const context: EditorContext | undefined =
-    typeof rawContext === 'object' && rawContext !== null
-      ? sanitizeEditorContext(rawContext as Record<string, unknown>)
-      : undefined;
+  const workspacePath = typeof args?.workspacePath === 'string' ? args.workspacePath : undefined;
+  const context = prompt.trim() ? await resolveProjectContext(workspacePath, args?.context, prompt) : undefined;
   return { prompt, context };
-}
-
-function sanitizeEditorContext(raw: Record<string, unknown>): EditorContext {
-  const file = (value: unknown): { path: string; language?: string; content?: string } | undefined => {
-    if (typeof value !== 'object' || value === null) return undefined;
-    const record = value as Record<string, unknown>;
-    if (typeof record.path !== 'string') return undefined;
-    return {
-      path: record.path,
-      language: typeof record.language === 'string' ? record.language : undefined,
-      content: typeof record.content === 'string' ? record.content : undefined,
-    };
-  };
-  return {
-    selectedCode: optString(raw.selectedCode),
-    cursorContext: optString(raw.cursorContext),
-    currentFile: file(raw.currentFile),
-    relatedFiles: Array.isArray(raw.relatedFiles)
-      ? raw.relatedFiles.map(file).filter((f): f is { path: string; language?: string; content?: string } => !!f)
-      : undefined,
-    projectType: optString(raw.projectType),
-  };
-}
-
-function optString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
 }
 
 function toolError(text: string): unknown {

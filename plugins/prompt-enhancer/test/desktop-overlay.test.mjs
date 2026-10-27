@@ -243,6 +243,22 @@ test("stop cancels exactly the running generation and clears the timer", async (
   assert.equal(c.textarea.value, "", "late result never reaches the preview");
 });
 
+test("retry after cancellation rejects late output from the earlier generation", async () => {
+  const h = harness();
+  const c = controls(h.views[0]);
+  c.button.click();
+  c.button.click();
+  c.retry.click();
+  h.generation.pending[0].resolve({ text: "late old output" });
+  await h.settle();
+  assert.equal(c.textarea.value, "");
+  assert.match(c.button.innerHTML, /■.*停止/);
+  h.generation.pending[1].resolve({ text: "new output" });
+  await h.settle();
+  assert.equal(c.textarea.value, "new output");
+  assert.equal(c.apply.disabled, false);
+});
+
 test("model switch stops the old generation; retry uses the new selection", async () => {
   const h = harness();
   const c = controls(h.views[0]);
