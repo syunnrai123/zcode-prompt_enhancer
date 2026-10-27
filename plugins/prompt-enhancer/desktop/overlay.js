@@ -151,7 +151,7 @@
     ".pe-history-text{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--color-foreground,#222)}",
     ".pe-history-del{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:20px;height:20px;border:0;border-radius:6px;background:transparent;color:var(--color-muted-foreground,#8a8f98);cursor:pointer;font-size:13px;line-height:1}",
     ".pe-history-del:hover{background:var(--color-surface-hover,rgba(0,0,0,.06));color:var(--color-text-danger,var(--color-danger,#e5534b))}",
-    ".pe-history-empty{padding:8px 12px;color:var(--color-muted-foreground,#8a8f98);font-size:12px}"
+    ".pe-history-item:focus{outline:2px solid var(--color-primary,#5b6cff);outline-offset:-2px}"
   ].join("\n");
 
   /* ---------- per-composer controller ---------- */
@@ -274,15 +274,25 @@
       for (var i = historyRows.length - 1; i >= 0; i--) { try { historyRows[i].remove(); } catch (e) { } }
       historyRows = [];
       if (!history.length) {
-        historyBox.appendChild(el("div", "pe-history-empty", L("暂无历史记录", "No history yet")));
+        historyBox.style.display = "none"; // toggle is hidden; fold here or it could never collapse
         return;
       }
       for (var idx = history.length - 1; idx >= 0; idx--) {
         (function (entry) {
           var item = el("div", "pe-history-item");
+          item.setAttribute("role", "button");
+          item.setAttribute("tabindex", "0");
           var preview = el("span", "pe-history-text");
           preview.textContent = entry.text; // textContent only: model output is never trusted as HTML
           preview.title = entry.text;
+          function load() {
+            ta.value = entry.text; state.text = entry.text; state.dirty = false;
+            state.original = currentDraft().trim() ? currentDraft() : entry.draft;
+            applyBtn.disabled = !ta.value.trim();
+            retryBtn.style.display = "";
+            setStatus(L("已载入历史记录", "Loaded from history"), false);
+            note.textContent = L("确认后才会替换输入框内容", "The composer is replaced only after you confirm");
+          }
           var del = el("button", "pe-history-del", "&times;");
           del.type = "button";
           del.title = L("删除这条记录", "Delete this entry");
@@ -290,13 +300,9 @@
             ev.stopPropagation();
             removeHistory(entry.id);
           });
-          item.addEventListener("click", function () {
-            ta.value = entry.text; state.text = entry.text; state.dirty = false;
-            state.original = currentDraft().trim() ? currentDraft() : entry.draft;
-            applyBtn.disabled = !ta.value.trim();
-            retryBtn.style.display = "";
-            setStatus(L("已载入历史记录", "Loaded from history"), false);
-            note.textContent = L("确认后才会替换输入框内容", "The composer is replaced only after you confirm");
+          item.addEventListener("click", load);
+          item.addEventListener("keydown", function (ev) {
+            if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); load(); }
           });
           item.appendChild(preview); item.appendChild(del);
           historyBox.appendChild(item); historyRows.push(item);
@@ -380,15 +386,9 @@
         return;
       }
       var draft = currentDraft();
+      if (!draft.trim()) { clearPreview(); refreshApplied(); openPanel(); return; }
       var applied = appliedBySession[sessionKey];
       state.original = applied && applied.enhanced === draft ? applied.original : draft;
-      if (!draft.trim()) {
-        ta.value = ""; state.text = ""; state.dirty = false;
-        setStatus(L("输入框为空:请先输入提示词草稿", "Composer is empty: type a draft first"), true);
-        applyBtn.disabled = true; retryBtn.style.display = "none"; note.textContent = "";
-        openPanel();
-        return;
-      }
       state.busy = true; state.dirty = false; state.text = "";
       requestContext = context;
       ta.value = ""; ta.readOnly = true;
@@ -466,14 +466,16 @@
         clearPreview(); refreshApplied(); openPanel();
         return;
       }
+      var applied = appliedBySession[sessionKey];
       var last = lastRunBySession[sessionKey];
-      if (last && last.draft === draft) {
+      if (last && last.draft.trim() === draft.trim()) {
         /* Unchanged draft: reuse the last result, no new request. Retry in the
-         * panel is the only regeneration path for the same draft. */
-        var applied = appliedBySession[sessionKey];
+         * panel is the only regeneration path for the same draft; whitespace-
+         * only drift still counts as unchanged. Hand-edited preview content
+         * (state.dirty) is preserved, mirroring the run() success handler. */
         state.original = applied && applied.enhanced === draft ? applied.original : draft;
-        state.text = last.enhanced; state.dirty = false;
-        ta.value = last.enhanced;
+        state.text = last.enhanced;
+        if (!state.dirty) ta.value = last.enhanced;
         applyBtn.disabled = !ta.value.trim();
         retryBtn.style.display = "";
         refreshApplied();
@@ -482,7 +484,6 @@
         openPanel();
         return;
       }
-      applied = appliedBySession[sessionKey];
       if (applied && applied.enhanced === draft) {
         /* Composer holds our applied output: reopen the review panel. */
         state.original = applied.original;

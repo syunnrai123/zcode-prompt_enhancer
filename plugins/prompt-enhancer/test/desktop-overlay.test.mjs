@@ -455,3 +455,77 @@ test("history entry click loads the text; regenerating replaces the entry", asyn
   assert.equal(c.textarea.value, "second");
   assert.equal(c.apply.disabled, false);
 });
+
+test("reuse keeps hand-edited preview content", async () => {
+  const h = harness();
+  const v = h.views[0];
+  const c = controls(v);
+  c.button.click();
+  h.generation.pending[0].resolve({ text: "raw result" });
+  await h.settle();
+  c.textarea.value = "my hand edit";
+  c.textarea.fire("input");
+  c.close.click();
+  c.button.click();
+  assert.equal(h.generation.calls.length, 1, "no regeneration");
+  assert.equal(c.textarea.value, "my hand edit", "hand edit survives the reuse reopen");
+  assert.match(c.status.textContent, /复用/);
+});
+
+test("whitespace-only draft drift still reuses the last result", async () => {
+  const h = harness();
+  const v = h.views[0];
+  const c = controls(v);
+  c.button.click();
+  h.generation.pending[0].resolve({ text: "result" });
+  await h.settle();
+  c.close.click();
+  v.input.__zcodeLexicalInputE2E.setText(v.getDraft() + "  ");
+  c.button.click();
+  assert.equal(h.generation.calls.length, 1, "trailing-space draft does not regenerate");
+  assert.equal(c.textarea.value, "result");
+});
+
+test("retry with an empty composer clears the panel and collapses history", async () => {
+  const h = harness();
+  const v = h.views[0];
+  const c = controls(v);
+  c.button.click();
+  h.generation.pending[0].resolve({ text: "one" });
+  await h.settle();
+  c.historyToggle.click();
+  assert.equal(c.historyBox.style.display, "block");
+  v.input.__zcodeLexicalInputE2E.setText("");
+  c.retry.click();
+  assert.equal(h.generation.calls.length, 1, "no generation for an empty composer");
+  assert.equal(c.textarea.value, "");
+  assert.match(c.status.textContent, /输入框为空/);
+  assert.equal(c.historyBox.style.display, "none", "clear path folds the history box");
+});
+
+test("deleting the last history entry collapses the list and hides the toggle", async () => {
+  const h = harness();
+  const c = controls(h.views[0]);
+  c.button.click();
+  h.generation.pending[0].resolve({ text: "only" });
+  await h.settle();
+  c.historyToggle.click();
+  assert.equal(c.historyBox.style.display, "block");
+  c.historyBox.querySelectorAll(".pe-history-del")[0].click();
+  assert.equal(c.historyBox.style.display, "none", "box folds when emptied");
+  assert.equal(c.historyToggle.style.display, "none", "toggle hides when empty");
+});
+
+test("history entries are keyboard operable", async () => {
+  const h = harness();
+  const c = controls(h.views[0]);
+  c.button.click();
+  h.generation.pending[0].resolve({ text: "kbd result" });
+  await h.settle();
+  c.historyToggle.click();
+  const item = c.historyBox.querySelectorAll(".pe-history-item")[0];
+  assert.equal(item.getAttribute("role"), "button");
+  assert.equal(item.getAttribute("tabindex"), "0");
+  item.fire("keydown", { key: "Enter" });
+  assert.equal(c.textarea.value, "kbd result");
+});
