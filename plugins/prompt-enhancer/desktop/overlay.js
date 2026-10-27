@@ -11,6 +11,12 @@
  *   - apply ("使用增强结果") / revert ("恢复原稿") via the composer's built-in
  *     E2E lexical bridge (__zcodeLexicalInputE2E), cancel while generating,
  *     and a watchdog so the UI can never spin forever silently.
+ *   - result reuse: clicking the button while the composer still holds the
+ *     draft of the last completed generation reopens that result without a
+ *     new request; only the panel's retry button regenerates. An empty
+ *     composer clears the preview synchronously (no stale prompts).
+ *   - a history of the last 10 enhanced prompts (oldest dropped first) with
+ *     per-entry delete; entries dedupe by draft so retries replace, not pile up.
  *
  * Generation uses the current session model through the Host service exposed
  * by host-bridge.js (window.__peHostBridge), never a separate API key.
@@ -18,7 +24,7 @@
 (function () {
   /* VERSION is stamped from package.json by scripts/embed-system-prompt.mjs
    * during `npm run build` — do not bump it by hand. */
-  var VERSION = "0.3.0";  if (window.__peOverlay && window.__peOverlayVersion === VERSION) return;
+  var VERSION = "0.3.1";  if (window.__peOverlay && window.__peOverlayVersion === VERSION) return;
   if (window.__peDispose) { try { window.__peDispose(); } catch (e) { } }
   window.__peOverlay = true;
   window.__peOverlayVersion = VERSION;
@@ -138,12 +144,23 @@
     ".pe-btn-ghost{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:1px solid var(--color-border,#d5d8dd);border-radius:8px;background:transparent;color:var(--color-muted-foreground,#59626e);font-size:12.5px;cursor:pointer}",
     ".pe-btn-ghost:hover{background:var(--color-surface-hover,rgba(0,0,0,.05));color:var(--color-foreground,#222)}",
     ".pe-btn-ghost:disabled{opacity:.5;cursor:default}",
-    ".pe-foot-note{color:var(--color-muted-foreground,#8a8f98);font-size:12px;margin-left:auto;white-space:nowrap}"
+    ".pe-foot-note{color:var(--color-muted-foreground,#8a8f98);font-size:12px;margin-left:auto;white-space:nowrap}",
+    ".pe-history{max-height:180px;overflow:auto;border-top:1px solid var(--color-border,#eceef2)}",
+    ".pe-history-item{display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer}",
+    ".pe-history-item:hover{background:var(--color-surface-hover,rgba(0,0,0,.05))}",
+    ".pe-history-text{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--color-foreground,#222)}",
+    ".pe-history-del{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:20px;height:20px;border:0;border-radius:6px;background:transparent;color:var(--color-muted-foreground,#8a8f98);cursor:pointer;font-size:13px;line-height:1}",
+    ".pe-history-del:hover{background:var(--color-surface-hover,rgba(0,0,0,.06));color:var(--color-text-danger,var(--color-danger,#e5534b))}",
+    ".pe-history-empty{padding:8px 12px;color:var(--color-muted-foreground,#8a8f98);font-size:12px}"
   ].join("\n");
 
   /* ---------- per-composer controller ---------- */
 
   var appliedBySession = {}; // sessionKey -> {original, enhanced}
+  var lastRunBySession = {}; // sessionKey -> {draft, enhanced} of the last completed generation
+  var HISTORY_LIMIT = 10;    // enhanced prompts kept in the panel history (default)
+  var history = [];          // oldest first, newest last, capped at HISTORY_LIMIT
+  var historySeq = 0;
   var ctlByInput = new WeakMap();
   var activeGeneration = null; // only one generation app-wide at a time
 
@@ -191,10 +208,16 @@
     revertBtn.type = "button";
     var retryBtn = el("button", "pe-btn-ghost", L("重新生成", "Retry"));
     retryBtn.type = "button"; retryBtn.style.display = "none";
+    var historyBtn = el("button", "pe-btn-ghost", L("历史", "History"));
+    historyBtn.type = "button"; historyBtn.style.display = "none";
     var note = el("span", "pe-foot-note", "");
-    foot.appendChild(cancelBtn); foot.appendChild(applyBtn); foot.appendChild(revertBtn); foot.appendChild(retryBtn); foot.appendChild(note);
+    foot.appendChild(cancelBtn); foot.appendChild(applyBtn); foot.appendChild(revertBtn); foot.appendChild(retryBtn); foot.appendChild(historyBtn); foot.appendChild(note);
 
-    panel.appendChild(head); panel.appendChild(body); panel.appendChild(foot);
+    var historyBox = el("div", "pe-history");
+    historyBox.style.display = "none";
+    var historyRows = [];
+
+    panel.appendChild(head); panel.appendChild(body); panel.appendChild(historyBox); panel.appendChild(foot);
 
     /* Button sits immediately LEFT of the right-hand cluster (model selector,
      * context capacity, send). Falls back to after the CUA tool button. */
@@ -230,7 +253,56 @@
       status.className = "pe-panel-status" + (isError ? " pe-error" : "");
     }
     function openPanel() { panel.style.display = "flex"; mount(); try { ta.focus(); } catch (e) { } }
-    function closePanel() { panel.style.display = "none"; }
+    function closePanel() { panel.style.display = "none"; historyBox.style.display = "none"; }
+    function clearPreview() {
+      ta.value = ""; state.text = ""; state.dirty = false; state.original = "";
+      applyBtn.disabled = true; retryBtn.style.display = "none";
+      note.textContent = ""; historyBox.style.display = "none";
+      setStatus(L("输入框为空:请先输入提示词草稿", "Composer is empty: type a draft first"), true);
+    }
+    /* While the panel is open, a composer emptied by the user must not keep
+     * showing machine-generated residue; hand-edited text (state.dirty) is left
+     * alone until the next button click clears it unconditionally. */
+    function syncEmptyDraft() {
+      if (state.busy || state.dirty || panel.style.display === "none") return;
+      if (currentDraft().trim()) return;
+      clearPreview(); refreshApplied();
+    }
+    function renderHistoryUi() {
+      historyBtn.style.display = history.length ? "" : "none";
+      historyBtn.innerHTML = L("历史", "History") + " " + history.length;
+      for (var i = historyRows.length - 1; i >= 0; i--) { try { historyRows[i].remove(); } catch (e) { } }
+      historyRows = [];
+      if (!history.length) {
+        historyBox.appendChild(el("div", "pe-history-empty", L("暂无历史记录", "No history yet")));
+        return;
+      }
+      for (var idx = history.length - 1; idx >= 0; idx--) {
+        (function (entry) {
+          var item = el("div", "pe-history-item");
+          var preview = el("span", "pe-history-text");
+          preview.textContent = entry.text; // textContent only: model output is never trusted as HTML
+          preview.title = entry.text;
+          var del = el("button", "pe-history-del", "&times;");
+          del.type = "button";
+          del.title = L("删除这条记录", "Delete this entry");
+          del.addEventListener("click", function (ev) {
+            ev.stopPropagation();
+            removeHistory(entry.id);
+          });
+          item.addEventListener("click", function () {
+            ta.value = entry.text; state.text = entry.text; state.dirty = false;
+            state.original = currentDraft().trim() ? currentDraft() : entry.draft;
+            applyBtn.disabled = !ta.value.trim();
+            retryBtn.style.display = "";
+            setStatus(L("已载入历史记录", "Loaded from history"), false);
+            note.textContent = L("确认后才会替换输入框内容", "The composer is replaced only after you confirm");
+          });
+          item.appendChild(preview); item.appendChild(del);
+          historyBox.appendChild(item); historyRows.push(item);
+        })(history[idx]);
+      }
+    }
     function refreshApplied() {
       var ap = appliedBySession[sessionKey];
       btn.classList.toggle("pe-applied", !!ap);
@@ -355,6 +427,8 @@
         clearInterval(tick);
         state.text = result.text || "";
         if (!state.dirty) ta.value = state.text;
+        lastRunBySession[sessionKey] = { draft: draft, enhanced: state.text };
+        pushHistory(draft, state.text);
         resetBusyUi();
         applyBtn.disabled = !ta.value.trim();
         retryBtn.style.display = "";
@@ -384,24 +458,52 @@
       e.preventDefault(); e.stopPropagation();
       if (state.busy) { cancel(); return; }
       if (panel.style.display !== "none") { closePanel(); return; }
-      var applied = appliedBySession[sessionKey];
-      if (applied) {
+      var draft = currentDraft();
+      if (!draft.trim()) {
+        /* Empty composer: without a readable bridge run() reports the precise
+         * setup error; otherwise clear every trace of the previous result. */
+        if (!bridgeOf(input)) { run(); return; }
+        clearPreview(); refreshApplied(); openPanel();
+        return;
+      }
+      var last = lastRunBySession[sessionKey];
+      if (last && last.draft === draft) {
+        /* Unchanged draft: reuse the last result, no new request. Retry in the
+         * panel is the only regeneration path for the same draft. */
+        var applied = appliedBySession[sessionKey];
+        state.original = applied && applied.enhanced === draft ? applied.original : draft;
+        state.text = last.enhanced; state.dirty = false;
+        ta.value = last.enhanced;
+        applyBtn.disabled = !ta.value.trim();
+        retryBtn.style.display = "";
+        refreshApplied();
+        setStatus(L("已复用上次增强结果", "Reused the previous result"), false);
+        note.textContent = L("内容未变不重复生成;「重新生成」可强制重试", "Draft unchanged; use 「Retry」 to force regeneration");
+        openPanel();
+        return;
+      }
+      applied = appliedBySession[sessionKey];
+      if (applied && applied.enhanced === draft) {
+        /* Composer holds our applied output: reopen the review panel. */
         state.original = applied.original;
-        if (!ta.value.trim()) {
-          state.text = applied.enhanced;
-          ta.value = applied.enhanced;
-        }
+        if (!ta.value.trim()) { state.text = applied.enhanced; ta.value = applied.enhanced; state.dirty = false; }
         applyBtn.disabled = !ta.value.trim();
         retryBtn.style.display = "";
         refreshApplied();
         setStatus(L("已替换输入框草稿", "Composer draft replaced"), false);
         note.textContent = L("可随时点「恢复原稿」撤回", "「Restore draft」 reverts anytime");
         openPanel();
-      } else if (ta.value.trim()) { refreshApplied(); openPanel(); }
-      else run();
+        return;
+      }
+      run();
     });
     cancelBtn.addEventListener("click", cancel);
     x.addEventListener("click", function () { if (state.busy) cancel(); closePanel(); });
+    historyBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      historyBox.style.display = historyBox.style.display === "none" ? "block" : "none";
+      renderHistoryUi();
+    });
     retryBtn.addEventListener("click", function () { run(); });
     applyBtn.addEventListener("click", function () {
       var text = ta.value;
@@ -431,6 +533,7 @@
     panel.addEventListener("keydown", function (e) { if (e.key === "Escape") { if (state.busy) cancel(); closePanel(); } });
 
     mount();
+    renderHistoryUi();
     refreshApplied();
 
     api = {
@@ -438,7 +541,8 @@
       btn: btn,
       panel: panel,
       valid: currentBinding,
-      rescan: mount,
+      rescan: function () { mount(); syncEmptyDraft(); },
+      renderHistory: renderHistoryUi,
       cancelForNewRun: function () { cancel(); },
       destroy: function () {
         cancel(); destroyed = true;
@@ -458,6 +562,24 @@
   }
 
   var ctls = [];
+  function renderHistoryAll() {
+    for (var i = 0; i < ctls.length; i++) { try { ctls[i].renderHistory(); } catch (e) { } }
+  }
+  function pushHistory(draft, text) {
+    if (!text) return;
+    for (var i = 0; i < history.length; i++) {
+      if (history[i].draft === draft) { history.splice(i, 1); break; } // retry replaces its entry
+    }
+    history.push({ id: ++historySeq, draft: draft, text: text });
+    while (history.length > HISTORY_LIMIT) history.shift();
+    renderHistoryAll();
+  }
+  function removeHistory(id) {
+    for (var i = 0; i < history.length; i++) {
+      if (history[i].id === id) { history.splice(i, 1); break; }
+    }
+    renderHistoryAll();
+  }
   function sweep() {
     if (stale()) return;
     var inputs = [];

@@ -171,6 +171,8 @@ function controls(view) {
     retry: panel.querySelectorAll("button").find((n) => n.innerHTML === "重新生成"),
     apply: panel.querySelectorAll("button").find((n) => n.innerHTML === "使用增强结果"),
     revert: panel.querySelectorAll("button").find((n) => n.innerHTML === "恢复原稿"),
+    historyToggle: panel.querySelectorAll("button").find((n) => n.innerHTML.indexOf("历史") === 0),
+    historyBox: panel.querySelector(".pe-history"),
     close: panel.querySelector(".pe-panel-x"),
     status: panel.querySelector(".pe-panel-status"),
   };
@@ -346,4 +348,110 @@ test("repeated apply still restores the original draft", async () => {
   assert.equal(v.getDraft(), "second");
   c.revert.click();
   assert.equal(v.getDraft(), original);
+});
+
+test("unchanged draft reuses the last result; retry is the only regeneration path", async () => {
+  const h = harness();
+  const v = h.views[0];
+  const c = controls(v);
+  c.button.click();
+  h.generation.pending[0].resolve({ text: "enhanced once" });
+  await h.settle();
+  c.close.click();
+  c.button.click();
+  assert.equal(h.generation.calls.length, 1, "same draft does not trigger a second generation");
+  assert.equal(c.textarea.value, "enhanced once");
+  assert.match(c.status.textContent, /复用/);
+  c.retry.click();
+  assert.equal(h.generation.calls.length, 2, "panel retry regenerates");
+  h.generation.pending[1].resolve({ text: "enhanced twice" });
+  await h.settle();
+  assert.equal(c.textarea.value, "enhanced twice");
+  v.input.__zcodeLexicalInputE2E.setText("a different draft");
+  c.close.click();
+  c.button.click();
+  assert.equal(h.generation.calls.length, 3, "edited draft regenerates");
+  assert.equal(h.generation.calls[2].draft, "a different draft");
+});
+
+test("empty composer clears the preview instead of keeping stale results", async () => {
+  const h = harness();
+  const v = h.views[0];
+  const c = controls(v);
+  c.button.click();
+  h.generation.pending[0].resolve({ text: "stale enhanced" });
+  await h.settle();
+  v.input.__zcodeLexicalInputE2E.setText("");
+  c.close.click();
+  c.button.click();
+  assert.equal(h.generation.calls.length, 1, "no generation for an empty composer");
+  assert.equal(c.textarea.value, "");
+  assert.match(c.status.textContent, /输入框为空/);
+  assert.equal(c.apply.disabled, true);
+
+  // applied results must not leak back either once the composer is emptied
+  c.close.click();
+  v.input.__zcodeLexicalInputE2E.setText("draft again");
+  c.button.click();
+  h.generation.pending[1].resolve({ text: "applied text" });
+  await h.settle();
+  c.apply.click();
+  assert.equal(v.getDraft(), "applied text");
+  v.input.__zcodeLexicalInputE2E.setText("");
+  c.close.click();
+  c.button.click();
+  assert.equal(c.textarea.value, "", "applied result does not leak back either");
+  assert.equal(h.generation.calls.length, 2);
+});
+
+test("sweep clears stale panel content once the composer is emptied", async () => {
+  const h = harness();
+  const v = h.views[0];
+  const c = controls(v);
+  c.button.click();
+  h.generation.pending[0].resolve({ text: "generated" });
+  await h.settle();
+  v.input.__zcodeLexicalInputE2E.setText("");
+  h.scan();
+  assert.equal(c.textarea.value, "", "open panel drops non-dirty residue within one sweep");
+});
+
+test("history keeps the 10 most recent results and deletes single entries", async () => {
+  const h = harness();
+  const v = h.views[0];
+  const c = controls(v);
+  for (let i = 1; i <= 12; i++) {
+    c.close.click();
+    c.button.click();
+    h.generation.pending[i - 1].resolve({ text: "enhanced " + i });
+    await h.settle();
+    v.input.__zcodeLexicalInputE2E.setText("draft " + (i + 1));
+  }
+  c.historyToggle.click();
+  const items = c.historyBox.querySelectorAll(".pe-history-item");
+  assert.equal(items.length, 10, "capped at 10 entries");
+  assert.equal(items[0].querySelector(".pe-history-text").textContent, "enhanced 12", "newest first");
+  assert.equal(items[9].querySelector(".pe-history-text").textContent, "enhanced 3", "oldest trimmed");
+  c.historyBox.querySelectorAll(".pe-history-del")[4].click();
+  const after = c.historyBox.querySelectorAll(".pe-history-item");
+  assert.equal(after.length, 9, "exactly one entry removed");
+  assert.equal(after[4].querySelector(".pe-history-text").textContent, "enhanced 7", "only the targeted entry is gone");
+});
+
+test("history entry click loads the text; regenerating replaces the entry", async () => {
+  const h = harness();
+  const c = controls(h.views[0]);
+  c.button.click();
+  h.generation.pending[0].resolve({ text: "first" });
+  await h.settle();
+  c.retry.click();
+  h.generation.pending[1].resolve({ text: "second" });
+  await h.settle();
+  c.historyToggle.click();
+  const items = c.historyBox.querySelectorAll(".pe-history-item");
+  assert.equal(items.length, 1, "retry on the same draft replaces, not duplicates");
+  assert.equal(items[0].querySelector(".pe-history-text").textContent, "second");
+  items[0].click();
+  assert.equal(c.textarea.value, "second");
+  assert.equal(c.apply.disabled, false);
 });

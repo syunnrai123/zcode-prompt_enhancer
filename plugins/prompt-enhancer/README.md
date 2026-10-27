@@ -4,7 +4,7 @@
 
 ## 入口
 
-- **桌面 ✦ 按钮**：使用当前会话模型，自动采集项目摘要，结果校验完成后在独立面板展示。用户确认后才写入草稿；支持停止、恢复原稿和模型切换取消。需安装桌面集成(见 `desktop/README.md`)。
+- **桌面 ✦ 按钮**：使用当前会话模型，自动采集项目摘要，结果校验完成后在独立面板展示。用户确认后才写入草稿；支持停止、恢复原稿和模型切换取消。草稿未变时再次点击直接复用上次结果(仅面板内「重新生成」会重新请求)；输入栏清空后面板同步清空；面板保留最近 10 条增强历史，可单条删除或点击回填。需安装桌面集成(见 `desktop/README.md`)。
 - **`/enhance-prompt` 与技能**：优先调用 `enhance_prompt`，无独立 provider Key 时按同一规则就地改写。可先用 `get_project_context` 获取摘要，无 Key 也可用。
 - **MCP 工具**：`enhance_prompt`、`get_project_context`、`get_enhancer_info`、`get_enhancement_rules`。
 - **CLI**：`node dist/cli.js`，stdin JSON 支持 `prompt`、`workspacePath`、`context`；stdout 为标记协议。
