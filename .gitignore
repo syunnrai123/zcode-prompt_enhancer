@@ -1,6 +1,46 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist-test/
 *.tsbuildinfo
+
+# Desktop patcher temp files (asar rewrite staging)
 .pe-new.tmp
+.pe-new.tmp.*
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Local env & secrets (never commit even if a fixture creates them)
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+*.p12
+*.pfx
+*.gpg
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+.git-credentials
+
+# Scratch / temp working dirs
 .tmp-*/
 .tmp-*.js
+tmp/
+temp/
+.cache/
+.eslintcache
