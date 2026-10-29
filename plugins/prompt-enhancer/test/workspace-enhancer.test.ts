@@ -17,7 +17,7 @@ describe('Host workspace enhancement', () => {
     const result = await enhanceWorkspaceText(service, params());
     assert.equal(result.text, '修复登录流程');
     assert.equal(sent?.draft, undefined);
-    assert.equal(sent?.maxOutputTokens, 1024);
+    assert.equal(sent?.maxOutputTokens, 8192);
     assert.ok(Number(sent?.requestTimeoutMs) > 0 && Number(sent?.requestTimeoutMs) <= 120_000);
     assert.deepEqual(sent?.selection, { providerId: 'p', modelId: 'm' });
     const messages = sent?.messages as Array<{ role: string; content: string }>;
@@ -28,6 +28,35 @@ describe('Host workspace enhancement', () => {
     assert.equal(input.draft, '修复登录');
     assert.ok(input.projectMetadata.includes('[Context Notes]'));
     assert.ok(input.projectMetadata.includes('Remote project context unavailable'));
+  });
+
+  it('leaves room for reasoning and final text even when the draft is short', async () => {
+    for (const reasoningLevel of ['high', 'xhigh', 'max']) {
+      const selection = { providerId: 'p', modelId: 'm', options: { reasoningLevel } };
+      let calls = 0;
+      const result = await enhanceWorkspaceText({ async generateWorkspaceText(args) {
+        calls++;
+        assert.deepEqual(args.selection, selection);
+        const complete = Number(args.maxOutputTokens) >= 931 + 200;
+        return {
+          text: complete ? '优化后的提示词：只读分析本项目的架构与核心实现，不修改文件。' : '只读分析本项目的',
+          finishReason: complete ? 'stop' : 'length',
+          usage: { outputTokens: complete ? 1131 : 1024, reasoningTokens: 931 },
+        };
+      } }, { ...params(), draft: '分析下本项目', selection });
+      assert.equal(result.text, '只读分析本项目的架构与核心实现，不修改文件。');
+      assert.equal(result.finishReason, 'stop');
+      assert.equal(calls, 1);
+    }
+  });
+
+  it('keeps the desktop generation budget bounded for short and long drafts', async () => {
+    for (const draft of ['分析下本项目', 'x'.repeat(20_000)]) {
+      await enhanceWorkspaceText({ async generateWorkspaceText(args) {
+        assert.equal(args.maxOutputTokens, 8192);
+        return { text: 'complete output', finishReason: 'stop' };
+      } }, { ...params(), draft });
+    }
   });
 
   it('does not read local paths for opaque workspace identities', async () => {

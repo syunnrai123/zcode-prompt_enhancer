@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
+import { enhanceWorkspaceText } from "../dist/desktop/workspace-enhancer.js";
 
 const source = fs.readFileSync(new URL("../desktop/overlay.js", import.meta.url), "utf8");
 
@@ -235,6 +236,74 @@ test("generation uses the current session context; apply and revert manage the d
   assert.equal(h.generation.calls.length, 1, "reopening does not regenerate");
   c.revert.click();
   assert.equal(v.getDraft(), original);
+});
+
+test("validated Host output reaches preview and applies only after confirmation", async () => {
+  const h = harness();
+  const v = h.views[0];
+  const c = controls(v);
+  const original = "分析下本项目";
+  v.input.__zcodeLexicalInputE2E.setText(original);
+  const selection = { providerId: "provider-a", modelId: "model-a", options: { reasoningLevel: "max" } };
+  h.window.__peGetSessionContext = () => ({ selection, workspacePath: "/synthetic" });
+  let pending;
+  let calls = 0;
+  h.generation.generate = (_input, draft, context) => {
+    pending = enhanceWorkspaceText({ async generateWorkspaceText(args) {
+      calls++;
+      assert.equal(args.maxOutputTokens, 8192);
+      assert.deepEqual(args.selection, selection);
+      return {
+        text: "优化后的提示词：只读分析本项目的架构与核心实现，不修改文件。",
+        finishReason: "stop",
+        usage: { outputTokens: 1131, reasoningTokens: 931 },
+      };
+    } }, { ...context, draft, remoteSessionId: "synthetic-remote", signal: new AbortController().signal });
+    return pending;
+  };
+  c.button.click();
+  await pending;
+  await h.settle();
+  assert.equal(calls, 1);
+  assert.equal(c.textarea.value, "只读分析本项目的架构与核心实现，不修改文件。");
+  assert.equal(c.apply.disabled, false);
+  assert.equal(v.getDraft(), original);
+  c.apply.click();
+  assert.equal(v.getDraft(), c.textarea.value);
+  c.revert.click();
+  assert.equal(v.getDraft(), original);
+});
+
+test("Host validation failures leave preview empty and cannot replace the draft", async () => {
+  for (const result of [
+    { text: "partial output", finishReason: "length" },
+    { text: "partial output", error: "stream error" },
+    { text: "broken\ufffd", finishReason: "stop" },
+  ]) {
+    const h = harness();
+    const v = h.views[0];
+    const c = controls(v);
+    const original = v.getDraft();
+    let pending;
+    let calls = 0;
+    h.generation.generate = (_input, draft, context) => {
+      pending = enhanceWorkspaceText({ async generateWorkspaceText() {
+        calls++;
+        return result;
+      } }, { ...context, draft, remoteSessionId: "synthetic-remote", signal: new AbortController().signal });
+      return pending;
+    };
+    c.button.click();
+    await assert.rejects(pending);
+    await h.settle();
+    assert.equal(calls, 1);
+    assert.equal(c.textarea.value, "");
+    assert.equal(c.apply.disabled, true);
+    assert.match(c.status.className, /pe-error/);
+    assert.equal(c.historyBox.children.length, 0);
+    c.apply.click();
+    assert.equal(v.getDraft(), original);
+  }
 });
 
 test("stop cancels exactly the running generation and clears the timer", async () => {

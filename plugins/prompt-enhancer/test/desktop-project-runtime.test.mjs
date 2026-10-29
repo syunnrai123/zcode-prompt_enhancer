@@ -22,7 +22,7 @@ test('Host wrapper imports the copied ESM runtime and assembles project metadata
   let sent;
   const service = {
     existing() { return 'preserved'; },
-    async generateWorkspaceText(args) { sent = args; return { text: 'Optimized prompt: complete output' }; },
+    async generateWorkspaceText(args) { sent = args; return { text: 'Optimized prompt: complete output', finishReason: 'stop' }; },
   };
   const wrapped = wrapper(pathToFileURL(path.join(runtime, 'dist', 'desktop', 'workspace-enhancer.js')).href)(service);
   const result = await wrapped.__peGenerateWorkspaceText({ operationId: 'op', draft: 'fix', workspacePath: project });
@@ -32,6 +32,7 @@ test('Host wrapper imports the copied ESM runtime and assembles project metadata
   assert.equal(wrapped.existing(), 'preserved');
   assert.equal(sent.operationId, undefined);
   assert.equal(sent.draft, undefined);
+  assert.equal(sent.maxOutputTokens, 8192);
   const input = JSON.parse(sent.messages[1].content);
   assert.equal(input.draft, 'fix');
   assert.ok(input.projectMetadata.includes('[Tech Stack]'));

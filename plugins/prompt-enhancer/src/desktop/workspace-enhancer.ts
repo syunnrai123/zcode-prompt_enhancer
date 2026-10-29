@@ -1,5 +1,5 @@
 import { collectProjectContext } from '../context/project-context.js';
-import { buildFullPrompt, computeMaxTokens } from '../core/prompt-builder.js';
+import { buildFullPrompt } from '../core/prompt-builder.js';
 import { validateEnhancedOutput } from '../core/output-guard.js';
 import { ENHANCE_SYSTEM_PROMPT } from '../core/system-prompt.js';
 
@@ -82,7 +82,8 @@ export async function enhanceWorkspaceText(service: WorkspaceTextService, params
       ...routing,
       querySource: 'prompt_enhancer',
       signal: controller.signal,
-      maxOutputTokens: computeMaxTokens(draft.length),
+      // Host output budgets include reasoning tokens, even for very short drafts.
+      maxOutputTokens: 8192,
       messages: [
         { role: 'system', content: ENHANCE_SYSTEM_PROMPT },
         { role: 'user', content: buildFullPrompt(draft, context) },
