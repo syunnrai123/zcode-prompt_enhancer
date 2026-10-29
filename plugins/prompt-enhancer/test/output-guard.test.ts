@@ -29,6 +29,11 @@ describe('cleanEnhancedOutput', () => {
     assert.equal(result.modified, true);
   });
 
+  it('preserves multi-file lists, paragraphs, questions and explicit code examples', () => {
+    const text = '只分析，不修改文件。\n\n1. 对比 src/a.ts 与 src/b.ts。\n2. 为什么 `value !== null` 仍会失败？\n\n保留以下示例：\n```ts\nconst token = process.env.API_KEY;\n```';
+    assert.deepEqual(validateEnhancedOutput(text), { text, modified: false });
+  });
+
   it('strips recognized spoken prefixes in English and Chinese', () => {
     assert.equal(cleanEnhancedOutput('Optimized prompt: do the thing').text, 'do the thing');
     assert.equal(cleanEnhancedOutput('Here is the enhanced prompt:做这件事').text, '做这件事');

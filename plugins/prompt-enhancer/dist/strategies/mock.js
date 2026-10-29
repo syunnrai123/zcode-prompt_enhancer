@@ -12,7 +12,7 @@ export class MockStrategy {
         const enhanced = [
             '[mock-enhanced]',
             ...lines.map((line, index) => `${index + 1}. ${line}`),
-            '[Mock: rewrite concisely (≤1.5x), at most one file anchor, no boilerplate.]',
+            '[Mock: wiring test only; no semantic rewrite evaluation.]',
         ].join('\n');
         return { enhancedPrompt: enhanced, provider: this.id, model: this.resolvedModel };
     }

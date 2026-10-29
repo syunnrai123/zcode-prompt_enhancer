@@ -13,7 +13,7 @@ const SERVER_VERSION_FALLBACK = '0.0.0';
 export const TOOLS = [
     {
         name: 'enhance_prompt',
-        description: 'Rewrite a draft prompt into a clear, CONCISE, unambiguous instruction (≤1.5x the original length, at most one file/symbol anchor). Uses bounded project basics and recent Git changes from workspacePath when supplied, or explicit project metadata. Returns the enhanced prompt in the same language as the draft; never executes the task described in it.',
+        description: 'Rewrite a draft into a faithful, clear prompt grounded in user intent. Preserves task type, explicit constraints and uncertainty; never executes the task or invents requirements. Uses bounded project metadata from workspacePath or context strictly as silent internal background — never echoes unmentioned paths, tech stack, or Git status into the rewritten prompt. No automatic conversation history or source bodies; returns only the rewritten prompt in the draft\'s language, followed by provider metadata in a separate content block.',
         inputSchema: {
             type: 'object',
             properties: {

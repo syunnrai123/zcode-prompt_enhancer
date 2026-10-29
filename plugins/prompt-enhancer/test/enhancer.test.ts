@@ -43,6 +43,22 @@ describe('PromptEnhancerService', () => {
     assert.ok(events.some((e) => e.type === 'enhance:end'));
   });
 
+  it('assembles the public draft and metadata once before invoking a strategy', async () => {
+    const draft = '只分析 src/a.ts 和 src/b.ts\n不要改代码。';
+    let sent = '';
+    const registry = new ProviderStrategyRegistry().register({
+      id: 'capture', resolvedModel: 'test-model', isConfigured: () => true,
+      async enhance(request) {
+        sent = request.prompt;
+        return { enhancedPrompt: draft, provider: 'capture', model: 'test-model' };
+      },
+    });
+    const service = new PromptEnhancerService(registry, resolveConfig({ PROMPT_ENHANCER_PROVIDER: 'capture' }));
+    const result = await service.enhance({ prompt: draft, context: { notes: ['Partial context.'] } });
+    assert.deepEqual(JSON.parse(sent), { draft, projectMetadata: '[Context Notes]\n- Partial context.' });
+    assert.equal(result.enhancedPrompt, draft);
+  });
+
   it('fails with an actionable selection error when nothing is configured', async () => {
     const registry = new ProviderStrategyRegistry().register(new OpenAiCompatibleStrategy({ id: 'glm' }));
     const service = new PromptEnhancerService(registry, resolveConfig({}));

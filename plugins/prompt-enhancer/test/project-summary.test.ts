@@ -73,7 +73,7 @@ describe('large-project metadata selection', () => {
     assert.ok(summary.relevantPaths.length <= 24);
     const prompt = buildFullPrompt(`修复 ${target}`, summary);
     assert.ok(prompt.includes(target));
-    assert.ok(prompt.split('It may be incomplete.\n\n')[1]!.length <= MAX_PROJECT_CONTEXT_LENGTH);
+    assert.ok(JSON.parse(prompt).projectMetadata.length <= MAX_PROJECT_CONTEXT_LENGTH);
   });
 
   it('keeps multiple change modules and reports lower-bound counts for a truncated index', () => {

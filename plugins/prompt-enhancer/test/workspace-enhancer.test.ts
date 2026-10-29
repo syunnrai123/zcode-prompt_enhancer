@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { enhanceWorkspaceText, type WorkspaceTextService } from '../src/desktop/workspace-enhancer.js';
+import { ENHANCE_SYSTEM_PROMPT } from '../src/core/system-prompt.js';
 
 function params(signal = new AbortController().signal) {
   return { draft: '修复登录', workspacePath: '/remote/workspace', remoteSessionId: 'remote-1',
@@ -19,9 +20,14 @@ describe('Host workspace enhancement', () => {
     assert.equal(sent?.maxOutputTokens, 1024);
     assert.ok(Number(sent?.requestTimeoutMs) > 0 && Number(sent?.requestTimeoutMs) <= 120_000);
     assert.deepEqual(sent?.selection, { providerId: 'p', modelId: 'm' });
-    const messages = sent?.messages as Array<{ content: string }>;
-    assert.ok(messages[1]!.content.includes('[Context Notes]'));
-    assert.ok(messages[1]!.content.includes('Remote project context unavailable'));
+    const messages = sent?.messages as Array<{ role: string; content: string }>;
+    assert.equal(messages.length, 2, 'no conversation history is implicitly added');
+    assert.deepEqual(messages.map((message) => message.role), ['system', 'user']);
+    assert.equal(messages[0]!.content, ENHANCE_SYSTEM_PROMPT);
+    const input = JSON.parse(messages[1]!.content);
+    assert.equal(input.draft, '修复登录');
+    assert.ok(input.projectMetadata.includes('[Context Notes]'));
+    assert.ok(input.projectMetadata.includes('Remote project context unavailable'));
   });
 
   it('does not read local paths for opaque workspace identities', async () => {

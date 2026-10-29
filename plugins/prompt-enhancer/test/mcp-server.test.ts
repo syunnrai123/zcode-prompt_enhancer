@@ -6,6 +6,7 @@ import { parseMessage } from '../src/mcp/stdio.js';
 import { PromptEnhancerService } from '../src/core/enhancer.js';
 import { ProviderStrategyRegistry } from '../src/strategies/provider-strategy.js';
 import { MockStrategy } from '../src/strategies/mock.js';
+import { ENHANCE_SYSTEM_PROMPT } from '../src/core/system-prompt.js';
 import { resolveConfig } from '../src/config/config.js';
 
 function deps() {
@@ -86,9 +87,11 @@ describe('MCP dispatch', () => {
   it('exposes the canonical rules for agent-side enhancement', async () => {
     const reply = await handleMessage(msg('tools/call', { name: 'get_enhancement_rules' }), deps());
     const text = (reply!.result as { content: Array<{ text: string }> }).content[0]!.text;
+    assert.equal(text, ENHANCE_SYSTEM_PROMPT);
     assert.match(text, /Output Rules/);
-    assert.match(text, /Brevity Contract/);
-    assert.match(text, /File Reference Policy/);
+    assert.match(text, /Intent and Information Preservation/);
+    assert.match(text, /Grounded Detail/);
+    assert.match(text, /Adaptive Detail/);
     assert.match(text, /Chinese in, Chinese out; English in, English out/);
   });
 

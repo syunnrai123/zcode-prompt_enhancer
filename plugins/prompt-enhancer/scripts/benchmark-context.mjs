@@ -31,7 +31,7 @@ try {
   const fullPrompt = buildFullPrompt(`修复 ${target}`, context);
   assert.ok(context.relevantPaths?.includes(target));
   assert.ok(fullPrompt.includes(target));
-  assert.ok(fullPrompt.split('It may be incomplete.\n\n')[1].length <= 6000);
+  assert.ok(JSON.parse(fullPrompt).projectMetadata.length <= 6000);
   assert.ok(!fullPrompt.includes('BENCH_SOURCE_NOT_SENT'));
   const sampleStart = performance.now();
   summarizePaths([...indexed, target], `修复 ${target}`, [], [], false, 'Synthetic index');
@@ -42,7 +42,7 @@ try {
     moduleSummaries: context.modules?.length,
     relevantPaths: context.relevantPaths?.length,
     explicitDeepTargetRetained: true,
-    contextChars: fullPrompt.split('It may be incomplete.\n\n')[1].length,
+    contextChars: JSON.parse(fullPrompt).projectMetadata.length,
     collectionMs: Number(elapsed.toFixed(1)),
     pathSelectionMs: Number(selectionMs.toFixed(1)),
     notes: context.notes,

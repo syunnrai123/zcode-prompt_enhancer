@@ -1,9 +1,9 @@
 {
   "name": "zcode-prompt-enhancer",
   "metadata": {
-    "description": "Prompt enhancement for ZCode: concise rewrites, desktop composer button, preview/apply/undo, slash command and MCP tool.",
+    "description": "Prompt enhancement for ZCode: faithful intent and grounded detail before concision; desktop preview/apply/undo, slash command and MCP tool.",
     "description_i18n": {
-      "zh-CN": "ZCode 提示词增强:精炼改写、输入框 ✦ 按钮、独立预览与回退、斜杠命令与 MCP 工具。"
+      "zh-CN": "ZCode 提示词增强：先忠实保留意图与有依据的细节，再精炼表达；提供桌面按钮、独立预览与回退、斜杠命令和 MCP 工具。"
     }
   },
   "plugins": [
@@ -11,13 +11,13 @@
       "name": "prompt-enhancer",
       "source": "./plugins/prompt-enhancer",
       "version": "0.3.2",
-      "description": "Prompt enhancer for ZCode: desktop button reuses the current session model (no extra key) with preview/apply/revert; slash command and MCP tool support optional external providers.",
+      "description": "Prompt enhancer for ZCode: faithful intent first, silent internal project context without leaking metadata into output. Desktop reuses the session model (no extra key) with preview/apply/revert; commands and MCP support optional external providers.",
       "displayName": "Prompt Enhancer",
       "displayName_i18n": {
         "zh-CN": "提示词增强器"
       },
       "description_i18n": {
-        "zh-CN": "通过输入框 ✦ 按钮、/enhance-prompt 命令或 enhance_prompt 工具将草稿提示词改写为清晰、精炼、无歧义的指令(精炼优先,少引用具体文件);支持 GLM、OpenAI 兼容与 Anthropic 提供方,未配置密钥时按同一规则就地增强。"
+        "zh-CN": "通过桌面按钮、/enhance-prompt 或 enhance_prompt 忠实改写草稿：保留任务类型与显式约束，项目上下文仅作内部静默依据、绝不混入输出。桌面复用会话模型无需额外 Key；工具支持 GLM、OpenAI 兼容与 Anthropic，命令/技能无 Key 时就地改写。"
       },
       "category": "productivity"
     }

@@ -32,8 +32,10 @@ test('Host wrapper imports the copied ESM runtime and assembles project metadata
   assert.equal(wrapped.existing(), 'preserved');
   assert.equal(sent.operationId, undefined);
   assert.equal(sent.draft, undefined);
-  assert.ok(sent.messages[1].content.includes('[Tech Stack]'));
-  assert.ok(sent.messages[1].content.includes('React'));
+  const input = JSON.parse(sent.messages[1].content);
+  assert.equal(input.draft, 'fix');
+  assert.ok(input.projectMetadata.includes('[Tech Stack]'));
+  assert.ok(input.projectMetadata.includes('React'));
 });
 
 test('Host wrapper cancellation aborts generation and disposes its operation', async () => {

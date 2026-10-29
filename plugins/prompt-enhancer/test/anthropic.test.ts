@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { EnhancerError } from '../src/core/types.js';
+import { buildFullPrompt } from '../src/core/prompt-builder.js';
+import { ENHANCE_SYSTEM_PROMPT } from '../src/core/system-prompt.js';
 import type { EnhancerConfig } from '../src/core/types.js';
 import { resolveConfig } from '../src/config/config.js';
 import { AnthropicStrategy } from '../src/strategies/anthropic.js';
@@ -56,7 +58,10 @@ describe('AnthropicStrategy', () => {
       return response([start(), frame({ type: 'ping' }), block('Please '), delta('review '),
         delta('the parser.'), blockStop(), finish(), stop()]);
     }) as typeof fetch });
-    assert.deepEqual(await strategy.enhance({ prompt: 'full prompt' }, CONFIG), {
+    const fullPrompt = buildFullPrompt('Explain "src/a.ts" and src/b.ts.\nDo not edit.', {
+      techStack: ['TypeScript'], notes: ['Partial metadata.'],
+    });
+    assert.deepEqual(await strategy.enhance({ prompt: fullPrompt }, CONFIG), {
       enhancedPrompt: 'Please review the parser.', provider: 'anthropic', model: 'test-model',
     });
     assert.equal(url, 'https://anthropic.test/v1/messages');
@@ -67,7 +72,9 @@ describe('AnthropicStrategy', () => {
     assert.equal(body.max_tokens, 1024);
     assert.equal(body.stream, true);
     assert.equal(body.thinking.type, 'disabled');
-    assert.equal(body.messages[0].content, 'full prompt');
+    assert.equal(body.system, ENHANCE_SYSTEM_PROMPT);
+    assert.equal(body.messages[0].content, fullPrompt);
+    assert.equal(JSON.parse(body.messages[0].content).draft, 'Explain "src/a.ts" and src/b.ts.\nDo not edit.');
   });
 
   it('accepts CJK/emoji byte splits, correctly framed multiline JSON, multiple text blocks and stop_sequence', async () => {

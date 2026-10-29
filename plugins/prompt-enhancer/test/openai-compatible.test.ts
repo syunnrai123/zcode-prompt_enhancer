@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { EnhancerError } from '../src/core/types.js';
+import { buildFullPrompt } from '../src/core/prompt-builder.js';
+import { ENHANCE_SYSTEM_PROMPT } from '../src/core/system-prompt.js';
 import type { EnhancerConfig } from '../src/core/types.js';
 import { OpenAiCompatibleStrategy } from '../src/strategies/openai-compatible.js';
 import { resolveConfig } from '../src/config/config.js';
@@ -57,7 +59,10 @@ describe('OpenAiCompatibleStrategy', () => {
         ]);
       }) as typeof fetch,
     });
-    assert.deepEqual(await strategy.enhance({ prompt: 'full prompt' }, CONFIG), {
+    const fullPrompt = buildFullPrompt('只分析 "src/a.ts" 和 src/b.ts\n不要修改。', {
+      techStack: ['TypeScript'], notes: ['Partial metadata.'],
+    });
+    assert.deepEqual(await strategy.enhance({ prompt: fullPrompt }, CONFIG), {
       enhancedPrompt: 'Please review the parser.', provider: 'openai-compatible', model: 'test-model',
     });
     assert.equal(calls[0]?.url, 'https://relay.example/v1/chat/completions');
@@ -65,8 +70,9 @@ describe('OpenAiCompatibleStrategy', () => {
     assert.equal(body.model, 'test-model');
     assert.equal(body.stream, true);
     assert.equal(body.max_tokens, 1024);
-    assert.match(body.messages[0].content, /prompt optimization expert/);
-    assert.equal(body.messages[1].content, 'full prompt');
+    assert.equal(body.messages[0].content, ENHANCE_SYSTEM_PROMPT);
+    assert.equal(body.messages[1].content, fullPrompt);
+    assert.equal(JSON.parse(body.messages[1].content).draft, '只分析 "src/a.ts" 和 src/b.ts\n不要修改。');
   });
 
   it('accepts correctly framed multiline JSON and byte-fragmented CJK/emoji', async () => {
