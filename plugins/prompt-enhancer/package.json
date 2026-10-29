@@ -1,6 +1,6 @@
 {
   "name": "zcode-plugin-prompt-enhancer",
-  "version": "0.3.2",
+  "version": "0.0.5",
   "private": true,
   "description": "Prompt enhancer plugin for ZCode: desktop input-box button + /enhance-prompt command + enhance_prompt MCP tool (GLM / OpenAI-compatible / Anthropic providers).",
   "type": "module",

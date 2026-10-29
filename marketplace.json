@@ -10,7 +10,7 @@
     {
       "name": "prompt-enhancer",
       "source": "./plugins/prompt-enhancer",
-      "version": "0.3.2",
+      "version": "0.0.5",
       "description": "Prompt enhancer for ZCode: faithful intent first, silent internal project context without leaking metadata into output. Desktop reuses the session model (no extra key) with preview/apply/revert; commands and MCP support optional external providers.",
       "displayName": "Prompt Enhancer",
       "displayName_i18n": {

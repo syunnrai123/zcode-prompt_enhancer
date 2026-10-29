@@ -51,7 +51,7 @@
     /* VERSION is stamped from package.json onto the compiled output by
      * scripts/embed-system-prompt.mjs during `npm run build` — do not bump it
      * by hand. */
-    var VERSION = "0.3.2";
+    var VERSION = "0.0.5";
     if (W.__peOverlay && W.__peOverlayVersion === VERSION)
         return;
     if (W.__peDispose) {
