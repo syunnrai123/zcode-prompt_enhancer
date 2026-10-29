@@ -8,6 +8,10 @@ function inputOf(prompt: string): { draft: string; projectMetadata?: string } {
 }
 
 describe('buildFullPrompt', () => {
+  it('uses an 8000-character metadata budget', () => {
+    assert.equal(MAX_PROJECT_CONTEXT_LENGTH, 8000);
+  });
+
   it('keeps only the original draft field when metadata is absent', () => {
     assert.deepEqual(inputOf(buildFullPrompt('fix the bug')), { draft: 'fix the bug' });
     assert.deepEqual(inputOf(buildFullPrompt('fix', {})), { draft: 'fix' });
@@ -129,6 +133,20 @@ describe('compactList', () => {
 });
 
 describe('truncateText', () => {
+  it('preserves text below and exactly at the metadata budget', () => {
+    for (const length of [MAX_PROJECT_CONTEXT_LENGTH - 1, MAX_PROJECT_CONTEXT_LENGTH]) {
+      const text = '元'.repeat(length);
+      assert.equal(truncateText(text, MAX_PROJECT_CONTEXT_LENGTH), text);
+    }
+  });
+
+  it('caps text one character over the metadata budget including the marker', () => {
+    const text = '元'.repeat(MAX_PROJECT_CONTEXT_LENGTH + 1);
+    const truncated = truncateText(text, MAX_PROJECT_CONTEXT_LENGTH);
+    assert.equal(truncated.length, MAX_PROJECT_CONTEXT_LENGTH);
+    assert.equal(truncated, text.slice(0, MAX_PROJECT_CONTEXT_LENGTH - 4) + '\n...');
+  });
+
   it('keeps both the text and truncation marker inside the budget', () => {
     assert.equal(truncateText('short', 10), 'short');
     assert.equal(truncateText('0123456789', 8), '0123\n...');

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { collectProjectContext } from '../dist/context/project-context.js';
-import { buildFullPrompt } from '../dist/core/prompt-builder.js';
+import { buildFullPrompt, MAX_PROJECT_CONTEXT_LENGTH } from '../dist/core/prompt-builder.js';
 import { summarizePaths } from '../dist/context/project-summary.js';
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pe-large-bench-'));
@@ -31,7 +31,7 @@ try {
   const fullPrompt = buildFullPrompt(`修复 ${target}`, context);
   assert.ok(context.relevantPaths?.includes(target));
   assert.ok(fullPrompt.includes(target));
-  assert.ok(JSON.parse(fullPrompt).projectMetadata.length <= 6000);
+  assert.ok(JSON.parse(fullPrompt).projectMetadata.length <= MAX_PROJECT_CONTEXT_LENGTH);
   assert.ok(!fullPrompt.includes('BENCH_SOURCE_NOT_SENT'));
   const sampleStart = performance.now();
   summarizePaths([...indexed, target], `修复 ${target}`, [], [], false, 'Synthetic index');

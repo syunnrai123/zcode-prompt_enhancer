@@ -1,4 +1,4 @@
-export const MAX_PROJECT_CONTEXT_LENGTH = 6000;
+export const MAX_PROJECT_CONTEXT_LENGTH = 8000;
 const MAX_LINE_LENGTH = 200;
 export function truncateText(text, maxLength) {
     if (text.length <= maxLength)
