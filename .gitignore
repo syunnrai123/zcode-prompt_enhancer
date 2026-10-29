@@ -19,7 +19,14 @@ Desktop.ini
 
 # Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 logs/
+
+# ZCode local workspace state (plans, permissions, per-machine config)
+.zcode/
 
 # Local env & secrets (never commit even if a fixture creates them)
 .env

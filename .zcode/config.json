@@ -1,7 +1,0 @@
-{
-  "plugins": {
-    "enabledPlugins": {
-      "prompt-enhancer@zcode-prompt-enhancer": true
-    }
-  }
-}
