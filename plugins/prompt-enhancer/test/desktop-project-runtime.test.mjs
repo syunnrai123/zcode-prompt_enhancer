@@ -25,7 +25,8 @@ test('Host wrapper imports the copied ESM runtime and assembles project metadata
     async generateWorkspaceText(args) { sent = args; return { text: 'Optimized prompt: complete output', finishReason: 'stop' }; },
   };
   const wrapped = wrapper(pathToFileURL(path.join(runtime, 'dist', 'desktop', 'workspace-enhancer.js')).href)(service);
-  const result = await wrapped.__peGenerateWorkspaceText({ operationId: 'op', draft: 'fix', workspacePath: project });
+  const selection = Object.freeze({ providerId: 'p', modelId: 'm', options: Object.freeze({ reasoningLevel: 'max' }) });
+  const result = await wrapped.__peGenerateWorkspaceText({ operationId: 'op', draft: 'fix', workspacePath: project, selection });
   assert.equal(result.text, 'complete output');
   assert.equal(result.promptEnhancerProtocol, 2);
   assert.equal(result.operationId, 'op');
@@ -33,6 +34,8 @@ test('Host wrapper imports the copied ESM runtime and assembles project metadata
   assert.equal(sent.operationId, undefined);
   assert.equal(sent.draft, undefined);
   assert.equal(sent.maxOutputTokens, 8192);
+  assert.deepEqual(sent.selection, { providerId: 'p', modelId: 'm', options: { reasoningLevel: 'high' } });
+  assert.equal(selection.options.reasoningLevel, 'max');
   const input = JSON.parse(sent.messages[1].content);
   assert.equal(input.draft, 'fix');
   assert.ok(input.projectMetadata.includes('[Tech Stack]'));
@@ -52,7 +55,7 @@ test('Host wrapper cancellation aborts generation and disposes its operation', a
     },
   };
   const wrapped = wrapper(moduleUrl)(service);
-  const pending = wrapped.__peGenerateWorkspaceText({ operationId: 'cancel', draft: 'fix', workspacePath: '/remote', remoteSessionId: 'r' });
+  const pending = wrapped.__peGenerateWorkspaceText({ operationId: 'cancel', draft: 'fix', workspacePath: '/remote', remoteSessionId: 'r', selection: { providerId: 'p', modelId: 'm' } });
   await started;
   assert.deepEqual(wrapped.__peCancelWorkspaceText({ operationId: 'cancel' }), { cancelled: true });
   await assert.rejects(pending, /取消/);

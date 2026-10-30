@@ -35,6 +35,17 @@ test("host patch wraps only the zcode-agent registration and restores exactly", 
   assert.equal(stripHostPatch(patched), HOST_SOURCE);
 });
 
+test("host patch wraps the @zcode/desktop 3.17 registration (er,at) and restores exactly", () => {
+  const NEXT_SOURCE =
+    'var at={generateWorkspaceText:async(y)=>({text:"ok"})};' +
+    'var services={register:function(c,s){return this;}};' +
+    'services.register(er,at);\n';
+  const patched = applyHostPatch(NEXT_SOURCE);
+  assert.ok(isHostPatched(patched));
+  assert.match(patched, /\.register\(er,__peWrapZcodeAgentService\(at\)\)/);
+  assert.equal(stripHostPatch(patched), NEXT_SOURCE);
+});
+
 test("host patch refuses an unknown bundle instead of guessing", () => {
   assert.throws(() => applyHostPatch("var other = 1;\n"), /unsupported ZCode host bundle/);
   assert.throws(() => applyHostPatch(HOST_SOURCE + "services.register(Kr,dt);\n"), /found 2/);

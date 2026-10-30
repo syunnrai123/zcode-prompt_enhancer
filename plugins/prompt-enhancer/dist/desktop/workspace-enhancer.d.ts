@@ -1,6 +1,16 @@
+interface WorkspaceSelection {
+    providerId: string;
+    modelId: string;
+    options?: {
+        reasoningLevel?: string;
+        [key: string]: unknown;
+    };
+    [key: string]: unknown;
+}
 interface WorkspaceParams {
     draft: string;
     workspacePath: string;
+    selection: WorkspaceSelection;
     remoteSessionId?: string;
     workspaceIdentity?: string;
     signal: AbortSignal;

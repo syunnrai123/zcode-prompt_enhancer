@@ -8,7 +8,8 @@
  *   __peCancelWorkspaceText({ operationId })
  *
  * All original methods are preserved. The original ZCode flow is untouched
- * except for the single `.register(Kr,dt)` expression; removal restores it.
+ * except for the single zcode-agent `.register(<token>,<service>)` expression;
+ * removal restores it.
  */
 
 export const HOST_ENTRY = "out/host/index.js";
@@ -19,8 +20,10 @@ export const HOST_PATCH_END = "/* zcode-prompt-enhancer-host:end */";
 /* Registration anchors. The two identifiers are minified per ZCode release;
  * when a ZCode update renames them, ADD the new literal here (keep old ones
  * so remove can still undo archives patched with them). Everything else in
- * this module derives from the list. */
-export const HOST_REGISTRATION_VARIANTS = [".register(Kr,dt)"];
+ * this module derives from the list.
+ *   .register(Kr,dt)  earlier ZCode builds
+ *   .register(er,at)  @zcode/desktop 3.17.1 (er = ZCodeAgent token, at = service) */
+export const HOST_REGISTRATION_VARIANTS = [".register(Kr,dt)", ".register(er,at)"];
 const GENERIC_REGISTRATION_RE = /\.register\((\w+),(\w+)\)/g;
 
 function wrappedOf(variant) {

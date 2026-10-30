@@ -252,7 +252,8 @@ test("validated Host output reaches preview and applies only after confirmation"
     pending = enhanceWorkspaceText({ async generateWorkspaceText(args) {
       calls++;
       assert.equal(args.maxOutputTokens, 8192);
-      assert.deepEqual(args.selection, selection);
+      assert.deepEqual(args.selection, { ...selection, options: { reasoningLevel: "high" } });
+      assert.equal(selection.options.reasoningLevel, "max");
       return {
         text: "优化后的提示词：只读分析本项目的架构与核心实现，不修改文件。",
         finishReason: "stop",
@@ -296,7 +297,8 @@ test("Host validation failures leave preview empty and cannot replace the draft"
     c.button.click();
     await assert.rejects(pending);
     await h.settle();
-    assert.equal(calls, 1);
+    // A length stop retries once at the larger budget before it fails.
+    assert.equal(calls, result.finishReason === "length" ? 2 : 1);
     assert.equal(c.textarea.value, "");
     assert.equal(c.apply.disabled, true);
     assert.match(c.status.className, /pe-error/);
