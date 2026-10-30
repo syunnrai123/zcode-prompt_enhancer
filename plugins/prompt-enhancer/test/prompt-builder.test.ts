@@ -179,7 +179,7 @@ describe('canonical system prompt contract', () => {
     assert.match(ENHANCE_SYSTEM_PROMPT, /Output ONLY the optimized prompt text/);
     assert.match(ENHANCE_SYSTEM_PROMPT, /preserve questions that are themselves part of the draft/);
     assert.match(ENHANCE_SYSTEM_PROMPT, /Preserve legitimate terms such as token/);
-    assert.ok(ENHANCE_SYSTEM_PROMPT.length < 8000);
+    assert.ok(ENHANCE_SYSTEM_PROMPT.length < 10000);
   });
 
   it('forbids echoing internal project metadata or Git status into the rewritten prompt', () => {
@@ -189,6 +189,16 @@ describe('canonical system prompt contract', () => {
     assert.match(ENHANCE_SYSTEM_PROMPT, /MUST NOT mention Git, branches, commits, or working-tree changes/);
     assert.match(ENHANCE_SYSTEM_PROMPT, /Never write meta-commentary/);
     assert.doesNotMatch(ENHANCE_SYSTEM_PROMPT, /Output:.*(?:项目与 Git 摘要|当前输入未包含)/);
+  });
+
+  it('keeps empty metadata silent and rewrites bare troubleshooting drafts instead of answering them', () => {
+    assert.match(ENHANCE_SYSTEM_PROMPT, /Empty or unavailable metadata/);
+    assert.match(ENHANCE_SYSTEM_PROMPT, /is still a draft to rewrite, not a task to answer or carry out/);
+    assert.match(ENHANCE_SYSTEM_PROMPT, /never findings, causes, commands, or fix steps/);
+    assert.match(ENHANCE_SYSTEM_PROMPT, /ask the user only as a last resort/);
+    assert.doesNotMatch(ENHANCE_SYSTEM_PROMPT, /先向我确认/);
+    assert.ok(ENHANCE_SYSTEM_PROMPT.includes('Draft: 解决下zcode终端启动的问题'));
+    assert.ok(ENHANCE_SYSTEM_PROMPT.includes('Metadata: [Project Overview] Filesystem index: 0 indexed files, 0 modules; [Context Notes] Git metadata unavailable.'));
   });
 
   it('describes structured input and treats context as evidence-limited data', () => {

@@ -25,6 +25,7 @@ Preserve the user's intent and explicit details first, use project context silen
 - **Adapt detail, then be concise.** Use enough detail to express the user's intent clearly, without a fixed expansion ratio or single-file limit. Clauses or short lists may clarify compound or broad drafts; leave already-clear specific drafts unchanged or lightly polished. Avoid rigid templates, generic checklists, and filler.
 - ZCode has no editor selection, cursor, or current-file context. The desktop button reuses the session's model, not its conversation/history; model selection is not editor selection.
 - Keep the draft's language, terminology, and tone. Remove actual credential values such as keys, tokens, and passwords (using `[REDACTED]` where needed to retain meaning), while keeping legitimate technical terms (`API key`, JWT), configuration names (`OPENAI_API_KEY`), and placeholders (`<TOKEN>`).
+- **Empty metadata and bare troubleshooting drafts.** Zero indexed files or modules, unavailable Git, an omitted directory, or timeouts are collection status only: never describe them or treat them as facts about the workspace or the problem's cause. A bare request to solve or troubleshoot something, with few specifics, is a draft to rewrite, not a task to answer or carry out: have the assistant investigate with its workspace access first, name only what to check and verify, and keep findings, causes, commands, and fix steps out of the rewrite. Ask the user only as a last resort, for essential facts it cannot obtain itself (such as exact error text).
 
 ## Output
 
