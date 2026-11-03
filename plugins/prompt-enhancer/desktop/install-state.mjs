@@ -1,4 +1,74 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/* All archive mutations share a lock outside the runtime, so --purge cannot
+ * remove the lock while a waiter or another ensure process still uses it. */
+export async function withArchiveLock(asarPath, operation, {
+  lockRoot = path.join(os.tmpdir(), "zcode-prompt-enhancer-locks"),
+  timeoutMs = 60000,
+  intervalMs = 50,
+} = {}) {
+  const archive = path.resolve(asarPath);
+  const key = createHash("sha256").update(process.platform === "win32" ? archive.toLowerCase() : archive).digest("hex");
+  fs.mkdirSync(lockRoot, { recursive: true });
+  const lockPath = path.join(lockRoot, key + ".lock");
+  const started = Date.now();
+  let fd;
+  while (fd === undefined) {
+    try { fd = fs.openSync(lockPath, "wx"); }
+    catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      if (Date.now() - started >= timeoutMs) {
+        throw new Error(`Timed out waiting for another desktop installer. If no installer is running, remove the stale lock: ${lockPath}`);
+      }
+      await sleep(intervalMs);
+    }
+  }
+  try {
+    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, archive, startedAt: new Date().toISOString() }));
+    return await operation();
+  } finally {
+    fs.closeSync(fd);
+    fs.unlinkSync(lockPath);
+  }
+}
+
+/* Keep cancellation outside runtimeDir: a queued process must remain cancelled
+ * even after remove --purge deletes its scripts and status file. */
+export function readInstallControl(runtimeDir) {
+  try {
+    const state = JSON.parse(fs.readFileSync(runtimeDir + ".install-control.json", "utf8"));
+    if (typeof state.generation !== "string" || typeof state.enabled !== "boolean") throw new Error("invalid installation control state");
+    return state;
+  } catch (e) {
+    if (e.code === "ENOENT") return null;
+    throw e;
+  }
+}
+
+export function setInstallControl(runtimeDir, enabled) {
+  const state = { generation: randomUUID(), enabled };
+  const file = runtimeDir + ".install-control.json";
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temp = file + "." + randomUUID() + ".tmp";
+  try {
+    fs.writeFileSync(temp, JSON.stringify(state) + "\n");
+    fs.renameSync(temp, file);
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
+  return state;
+}
+
+export function installIsCurrent(runtimeDir, generation) {
+  const state = readInstallControl(runtimeDir);
+  return state?.enabled === true && state.generation === generation;
+}
 
 /**
  * Best-effort "is the ZCode desktop app running" check, used to avoid patching
@@ -33,9 +103,12 @@ export async function waitForZCodeExit({
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   timeoutMs = 24 * 60 * 60 * 1000,
   intervalMs = 1000,
+  isCancelled = () => false,
 } = {}) {
   let elapsed = 0;
-  while (isRunning()) {
+  while (true) {
+    if (isCancelled()) return;
+    if (!isRunning()) return;
     if (elapsed >= timeoutMs) throw new Error("Timed out waiting for ZCode to exit; no archive changes were made.");
     await sleep(intervalMs);
     elapsed += intervalMs;

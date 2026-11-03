@@ -188,10 +188,10 @@ test("readElectronFuses parses the fuse wire and reports named states", () => {
   assert.equal(fuseState(none, ASAR_INTEGRITY_FUSE), "unknown");
 });
 
-test("applyHostPatch error names the anchor list for future ZCode renames", () => {
+test("applyHostPatch error asks for structural review instead of pinning an unproven anchor", () => {
   assert.throws(
     () => applyHostPatch("services.register(Qq,zz);\n"),
-    new RegExp("HOST_REGISTRATION_VARIANTS"),
+    /Conflicting or unproven bindings require reviewing desktop\/host-patch\.mjs, not adding a literal/,
   );
   assert.ok(Array.isArray(HOST_REGISTRATION_VARIANTS) && HOST_REGISTRATION_VARIANTS.length >= 1);
 });

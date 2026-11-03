@@ -5,10 +5,16 @@
  * app.asar (an ESM entry; a dynamic import works regardless of module type).
  * The line loads inject-main.cjs from a self-contained runtime directory.
  *
- *   node patch-desktop.mjs install [--asar <app.asar>] [--runtime <dir>] [--reset-config]
+ *   node patch-desktop.mjs install [--asar <app.asar>] [--runtime <dir>] [--reset-config] [--no-autostart]
+ *   node patch-desktop.mjs ensure  [--asar <app.asar>] [--runtime <dir>]
  *   node patch-desktop.mjs remove  [--asar <app.asar>] [--purge]
  *   node patch-desktop.mjs check   [--asar <app.asar>]
  *   node patch-desktop.mjs doctor  [--runtime <dir>]
+ *
+ * `ensure` is the entry point used by the auto-repatch trigger (autostart.mjs):
+ * it exits at once when the archive is patched, patches immediately when ZCode
+ * is closed, and otherwise queues the same --after-exit install a manual run
+ * would use.
  *
  * `doctor` reports patch state, runtime files, effective provider/key source
  * (never the key itself) and the tail of loader.log — use it first when the
@@ -30,8 +36,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { execSync, spawn } from "node:child_process";
-import { waitForZCodeExit, isZCodeRunning } from "./install-state.mjs";
+import { spawn } from "node:child_process";
+import { waitForZCodeExit, isZCodeRunning, withArchiveLock, readInstallControl, setInstallControl, installIsCurrent } from "./install-state.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ENTRY,
@@ -51,11 +57,22 @@ import {
   isHostPatched,
   stripHostPatch,
   hostPatchedVariant,
+  resolveRegistration,
 } from "./host-patch.mjs";
+import {
+  autostartSupported,
+  registerAutostart,
+  unregisterAutostart,
+  autostartStatus,
+} from "./autostart.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.dirname(HERE);
-const SOURCE_DIST = path.join(PLUGIN_ROOT, "dist");
+/* These scripts also run from the self-contained runtime directory
+ * (~/.zcode/zcode-prompt-enhancer), where dist/ and runtime-version.json sit
+ * beside them instead of under plugins/prompt-enhancer. */
+const RUNTIME_LAYOUT = fs.existsSync(path.join(HERE, "runtime-version.json")) || fs.existsSync(path.join(HERE, "dist"));
+const SOURCE_DIST = RUNTIME_LAYOUT ? path.join(HERE, "dist") : path.join(PLUGIN_ROOT, "dist");
 const SOURCE_ENHANCER = path.join(SOURCE_DIST, "desktop", "workspace-enhancer.js");
 const SOURCE_SCRIPTS = [
   "system-prompt.generated.js",
@@ -63,12 +80,35 @@ const SOURCE_SCRIPTS = [
   "host-bridge.js",
   "overlay.js",
 ];
+/* Shipped alongside the runtime so the scheduled `ensure` step can re-patch
+ * without depending on where the plugin cache lives. */
+const PATCHER_MODULES = [
+  "patch-desktop.mjs",
+  "asar-lib.mjs",
+  "host-patch.mjs",
+  "install-state.mjs",
+  "autostart.mjs",
+  "vendor/acorn.mjs",
+  "vendor/acorn.LICENSE",
+];
 const SOURCE_LOADER = path.join(HERE, "inject-main.cjs");
-const SOURCE_VERSION = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, "package.json"), "utf8")).version;
+const SOURCE_VERSION = readSourceVersion();
+
+function readSourceVersion() {
+  const files = RUNTIME_LAYOUT
+    ? [path.join(HERE, "runtime-version.json")]
+    : [path.join(PLUGIN_ROOT, "package.json")];
+  for (const file of files) {
+    try {
+      const version = JSON.parse(fs.readFileSync(file, "utf8")).version;
+      if (typeof version === "string" && version) return version;
+    } catch (e) { }
+  }
+  return "0.0.0";
+}
 
 function fail(msg) {
-  console.error("[zcode-prompt-enhancer] " + msg);
-  process.exit(1);
+  throw new Error(msg);
 }
 function info(msg) {
   console.log("[zcode-prompt-enhancer] " + msg);
@@ -135,19 +175,20 @@ function asarIntegrityFuseBlocksInstall(asarPath) {
   return { exe, state: fuseState(fuses, ASAR_INTEGRITY_FUSE), fuses };
 }
 
-function scheduleInstall(asarPath, runtimeExplicit, resetConfig) {
+function scheduleInstall(asarPath, runtimeExplicit, resetConfig, noAutostart, generation) {
   const runtimeDir = path.resolve(runtimeExplicit || path.join(os.homedir(), ".zcode", "zcode-prompt-enhancer"));
   fs.mkdirSync(runtimeDir, { recursive: true });
   const logPath = path.join(runtimeDir, "install.log");
   const statusPath = path.join(runtimeDir, "install-status.json");
   let previous;
   try { previous = JSON.parse(fs.readFileSync(statusPath, "utf8")); } catch (e) { }
-  if (previous?.state === "waiting" && previous.pid) {
+  if (previous?.state === "waiting" && previous.pid && previous.generation === generation) {
     try { process.kill(previous.pid, 0); info(`installation already waiting (pid ${previous.pid}); log: ${logPath}`); return; } catch (e) { }
   }
   const fd = fs.openSync(logPath, "a");
-  const childArgs = [fileURLToPath(import.meta.url), "install", "--wait-for-exit", "--asar", asarPath, "--runtime", runtimeDir];
+  const childArgs = [fileURLToPath(import.meta.url), "install", "--wait-for-exit", "--asar", asarPath, "--runtime", runtimeDir, "--generation", generation];
   if (resetConfig) childArgs.push("--reset-config");
+  if (noAutostart) childArgs.push("--no-autostart");
   try {
     const child = spawn(process.execPath, childArgs, { detached: true, windowsHide: true, stdio: ["ignore", fd, fd] });
     child.on("error", (e) => info("background installer failed: " + e.message));
@@ -157,17 +198,71 @@ function scheduleInstall(asarPath, runtimeExplicit, resetConfig) {
   } finally { fs.closeSync(fd); }
 }
 
+function sourceRuntimeFiles() {
+  const files = ["inject-main.cjs", ...SOURCE_SCRIPTS, ...PATCHER_MODULES, "dist/package.json"];
+  if (RUNTIME_LAYOUT) {
+    let manifest;
+    try { manifest = JSON.parse(fs.readFileSync(path.join(HERE, "runtime-version.json"), "utf8")); }
+    catch (e) { fail("Runtime manifest is missing or unreadable; reinstall desktop integration from the plugin folder."); }
+    if (!Array.isArray(manifest.requiredFiles)) fail("Runtime manifest is incomplete; reinstall desktop integration from the plugin folder.");
+    return [...new Set([...files, ...manifest.requiredFiles])];
+  }
+  const walk = (dir, prefix) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const relative = `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) walk(path.join(dir, entry.name), relative);
+      else if (entry.name.endsWith(".js")) files.push(relative);
+    }
+  };
+  const distMissing = ["desktop/workspace-enhancer.js", "context/project-context.js"].some((file) => !fs.existsSync(path.join(SOURCE_DIST, file)));
+  if (distMissing) fail("Compiled project-context runtime missing; build or reinstall desktop integration from the plugin folder.");
+  walk(SOURCE_DIST, "dist");
+  return [...new Set(files)];
+}
+
 function copyRuntime(runtimeDir, resetConfig) {
+  const requiredFiles = sourceRuntimeFiles();
+  for (const file of requiredFiles) {
+    if (file !== "dist/package.json" && !fs.existsSync(path.join(HERE, file.startsWith("dist/") && !RUNTIME_LAYOUT ? "../" + file : file))) {
+      fail(`Source runtime file missing: ${file}; reinstall desktop integration from the plugin folder.`);
+    }
+  }
   fs.mkdirSync(runtimeDir, { recursive: true });
   const loaderDst = path.join(runtimeDir, "inject-main.cjs");
-  fs.copyFileSync(SOURCE_LOADER, loaderDst);
+  const sameFile = (a, b) => path.resolve(a) === path.resolve(b);
+  if (!sameFile(SOURCE_LOADER, loaderDst)) fs.copyFileSync(SOURCE_LOADER, loaderDst);
   for (const name of SOURCE_SCRIPTS) {
-    fs.copyFileSync(path.join(HERE, name), path.join(runtimeDir, name));
+    const dst = path.join(runtimeDir, name);
+    if (!sameFile(path.join(HERE, name), dst)) fs.copyFileSync(path.join(HERE, name), dst);
   }
-  fs.cpSync(SOURCE_DIST, path.join(runtimeDir, "dist"), { recursive: true });
-  fs.writeFileSync(path.join(runtimeDir, "dist", "package.json"), '{"type":"module"}\n');
-  fs.writeFileSync(path.join(runtimeDir, "runtime-version.json"), JSON.stringify({ version: SOURCE_VERSION, protocol: 2, installedAt: new Date().toISOString() }, null, 2) + "\n");
+  for (const name of PATCHER_MODULES) {
+    const src = path.join(HERE, name);
+    const dst = path.join(runtimeDir, name);
+    if (!sameFile(src, dst)) {
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(src, dst);
+    }
+  }
+  const runtimeDist = path.join(runtimeDir, "dist");
+  if (!sameFile(SOURCE_DIST, runtimeDist)) fs.cpSync(SOURCE_DIST, runtimeDist, { recursive: true });
+  fs.writeFileSync(path.join(runtimeDist, "package.json"), '{"type":"module"}\n');
+  fs.writeFileSync(path.join(runtimeDir, "runtime-version.json"), JSON.stringify({ version: SOURCE_VERSION, protocol: 2, requiredFiles, installedAt: new Date().toISOString() }, null, 2) + "\n");
   return { runtimeDir, loaderDst };
+}
+
+/** Whether the runtime directory is present and current, without touching it. */
+function runtimeState(runtimeDir) {
+  let manifest = {};
+  try {
+    manifest = JSON.parse(fs.readFileSync(path.join(runtimeDir, "runtime-version.json"), "utf8"));
+  } catch (e) { }
+  const files = new Set([...sourceRuntimeFiles(), ...(Array.isArray(manifest.requiredFiles) ? manifest.requiredFiles : [])]);
+  const missing = [...files].filter((file) => !fs.existsSync(path.join(runtimeDir, file)));
+  return {
+    version: manifest.version,
+    missing,
+    current: manifest.version === SOURCE_VERSION && manifest.protocol === 2 && Array.isArray(manifest.requiredFiles) && missing.length === 0,
+  };
 }
 
 function cmdDoctor(runtimeExplicit, asarExplicit) {
@@ -188,7 +283,11 @@ function cmdDoctor(runtimeExplicit, asarExplicit) {
       info(`injection: ${stripInjectLines(mainText) !== mainText ? "PATCHED" : "clean (button will not appear)"}`);
       info(`host bridge: ${isHostPatched(hostText) ? "PATCHED" : "clean (cannot reuse session model)"}`);
       const variant = hostPatchedVariant(hostText);
-      if (isHostPatched(hostText) && variant) info(`host anchor: ${variant}`);
+      if (isHostPatched(hostText) && variant) info(`host anchor: ${variant} (in use)`);
+      else {
+        const resolved = resolveRegistration(hostText);
+        info(`host anchor: ${resolved ? `${resolved.variant} (${resolved.source})` : "none — this ZCode build is not supported"}`);
+      }
     } catch (e) {
       if (parsed) { try { fs.closeSync(parsed.fd); } catch (_) { } }
       info(`app.asar read failed: ${e.message}`);
@@ -210,7 +309,7 @@ function cmdDoctor(runtimeExplicit, asarExplicit) {
   );
   info("\n=== 2. runtime ===");
   info(`runtime: ${runtimeDir} ${fs.existsSync(runtimeDir) ? "" : "(MISSING — run install)"}`);
-  for (const f of ["inject-main.cjs", ...SOURCE_SCRIPTS, "dist/desktop/workspace-enhancer.js", "dist/context/project-context.js", "dist/package.json"]) {
+  for (const f of ["inject-main.cjs", ...SOURCE_SCRIPTS, ...PATCHER_MODULES, "dist/desktop/workspace-enhancer.js", "dist/context/project-context.js", "dist/package.json"]) {
     info(`  ${f}: ${fs.existsSync(path.join(runtimeDir, f)) ? "ok" : "MISSING"}`);
   }
   try {
@@ -226,6 +325,16 @@ function cmdDoctor(runtimeExplicit, asarExplicit) {
     }
     info(`background installer: ${state}; log: ${path.join(runtimeDir, "install.log")}`);
   } catch (e) { }
+  if (autostartSupported()) {
+    try {
+      const auto = autostartStatus();
+      info(`auto-repatch: ${auto.present ? auto.detail : "not installed (run install to enable)"}`);
+    } catch (e) { info(`auto-repatch: unknown (${e.message})`); }
+  } else {
+    info(process.platform === "win32"
+      ? "auto-repatch: disabled by ZCODE_PE_NO_AUTOSTART"
+      : "auto-repatch: not supported on this platform");
+  }
 
   info("\n=== 3. model source ===");
   info("  prompt generation: current session model (ZCode Host; no separate key)");
@@ -264,7 +373,7 @@ function cmdCheck(asarPath) {
   );
 }
 
-function cmdInstall(asarPath, runtimeExplicit, resetConfig, allowRunning) {
+function cmdInstall(asarPath, runtimeExplicit, resetConfig, allowRunning, noAutostart) {
   ensureZCodeClosed(allowRunning);
   for (const name of ["inject-main.cjs", ...SOURCE_SCRIPTS]) {
     if (!fs.existsSync(path.join(HERE, name))) fail(`${name} missing from the desktop folder.`);
@@ -291,7 +400,9 @@ function cmdInstall(asarPath, runtimeExplicit, resetConfig, allowRunning) {
     const currentHost = readEntryText(parsed, HOST_ENTRY);
     const nextMain = stripInjectLines(currentMain) + buildInjectLine(loaderDst);
     const moduleUrl = pathToFileURL(path.join(runtimeDir, "dist", "desktop", "workspace-enhancer.js")).href;
+    const resolved = resolveRegistration(stripHostPatch(currentHost));
     const nextHost = applyHostPatch(currentHost, moduleUrl);
+    if (resolved) info(`host anchor: ${resolved.variant} (${resolved.source})`);
     changed = [];
     if (nextMain !== currentMain) changed.push(ENTRY);
     if (nextHost !== currentHost) changed.push(HOST_ENTRY);
@@ -312,11 +423,91 @@ function cmdInstall(asarPath, runtimeExplicit, resetConfig, allowRunning) {
     fail(e.message);
   }
   info(`runtime: ${runtimeDir}`);
+  if (noAutostart) {
+    info("auto-repatch: skipped (--no-autostart). The button will disappear again after a ZCode update.");
+  } else if (!autostartSupported()) {
+    info("auto-repatch: skipped (unsupported platform, or ZCODE_PE_NO_AUTOSTART is set). Re-run install after a ZCode update.");
+  } else {
+    const auto = registerAutostart({ runtimeDir, nodePath: process.execPath, asarPath });
+    info(`auto-repatch: ${auto.detail}.`);
+  }
   info("restart ZCode; a ✦ 增强 button appears to the left of the model/context controls.");
 }
 
-function cmdRemove(asarPath, purge, allowRunning) {
+/* Entry point for the auto-repatch trigger. Must stay cheap: it runs every
+ * few minutes, so an already-patched archive is a read-only probe and exit. */
+function cmdEnsure(asarPath, runtimeExplicit, allowRunning) {
+  const runtimeDir = path.resolve(
+    runtimeExplicit || path.join(os.homedir(), ".zcode", "zcode-prompt-enhancer")
+  );
+  const control = readInstallControl(runtimeDir);
+  if (control && !control.enabled) {
+    info("ensure: desktop integration was removed; automatic repair is disabled.");
+    return;
+  }
+  const generation = control?.generation || setInstallControl(runtimeDir, true).generation;
+  let patched;
+  let parsed;
+  try {
+    parsed = readArchive(asarPath);
+    const main = readEntryText(parsed, ENTRY);
+    const host = readEntryText(parsed, HOST_ENTRY);
+    fs.closeSync(parsed.fd);
+    parsed = null;
+    patched = stripInjectLines(main) !== main && isHostPatched(host);
+  } catch (e) {
+    if (parsed) { try { fs.closeSync(parsed.fd); } catch (_) { } }
+    fail(`ensure: cannot read app.asar: ${e.message}`);
+  }
+
+  if (patched) {
+    const state = runtimeState(runtimeDir);
+    if (state.current) {
+      info("ensure: already patched and runtime is current; nothing to do.");
+      return;
+    }
+    copyRuntime(runtimeDir, false);
+    info(`ensure: archive is patched; runtime refreshed (${state.version ?? "unknown"} -> ${SOURCE_VERSION}).`);
+    return;
+  }
+
+  info("ensure: app.asar is official — a ZCode update removed the patch.");
+  if (isZCodeRunning() && !allowRunning) {
+    info("ensure: ZCode is running; installing as soon as it exits.");
+    scheduleInstall(asarPath, runtimeDir, false, false, generation);
+    return;
+  }
+  cmdInstall(asarPath, runtimeDir, false, allowRunning, false);
+}
+
+/** Tell a background installer that is still waiting for ZCode to exit to stop. */
+function markPendingInstallCancelled(runtimeDir) {
+  const statusPath = path.join(runtimeDir, "install-status.json");
+  try {
+    const status = JSON.parse(fs.readFileSync(statusPath, "utf8"));
+    if (!["waiting", "installing"].includes(status.state)) return;
+    fs.writeFileSync(
+      statusPath,
+      JSON.stringify({ state: "cancelled", pid: status.pid, version: status.version, updatedAt: new Date().toISOString() }, null, 2) + "\n"
+    );
+    info("cancelled the pending background installer; it will not re-patch after ZCode exits.");
+  } catch (e) {
+    if (e.code !== "ENOENT" && !(e instanceof SyntaxError)) throw e;
+  }
+}
+
+function cmdRemove(asarPath, runtimeExplicit, purge, allowRunning) {
+  const runtimeDir = path.resolve(
+    runtimeExplicit || path.join(os.homedir(), ".zcode", "zcode-prompt-enhancer")
+  );
   ensureZCodeClosed(allowRunning);
+  setInstallControl(runtimeDir, false);
+  markPendingInstallCancelled(runtimeDir);
+  if (autostartSupported()) {
+    const auto = unregisterAutostart();
+    if (auto.errors.length) fail(`Could not remove auto-repatch triggers: ${auto.errors.join("; ")}. Automatic repair is disabled; resolve these errors and retry remove before purging.`);
+    if (auto.removedTask || auto.removedStartup) info("auto-repatch trigger removed.");
+  }
   let parsed;
   try {
     parsed = readArchive(asarPath);
@@ -341,7 +532,6 @@ function cmdRemove(asarPath, purge, allowRunning) {
     fail(e.message);
   }
   if (purge) {
-    const runtimeDir = path.join(os.homedir(), ".zcode", "zcode-prompt-enhancer");
     if (fs.existsSync(runtimeDir)) {
       fs.rmSync(runtimeDir, { recursive: true, force: true });
       info(`runtime removed: ${runtimeDir}`);
@@ -350,21 +540,41 @@ function cmdRemove(asarPath, purge, allowRunning) {
   info("for a fully stock app, also uninstall the plugin in ZCode → Settings → Plugins.");
 }
 
-async function installAfterExit(asarPath, runtimeExplicit, resetConfig) {
+async function installAfterExit(asarPath, runtimeExplicit, resetConfig, noAutostart, expectedGeneration) {
   const runtimeDir = path.resolve(runtimeExplicit || path.join(os.homedir(), ".zcode", "zcode-prompt-enhancer"));
-  fs.mkdirSync(runtimeDir, { recursive: true });
   const statusPath = path.join(runtimeDir, "install-status.json");
-  const status = (state, error) => fs.writeFileSync(statusPath, JSON.stringify({ state, pid: process.pid, version: SOURCE_VERSION, updatedAt: new Date().toISOString(), ...(error ? { error } : {}) }, null, 2) + "\n");
-  try {
+  let generation = expectedGeneration;
+  const status = (state, error) => fs.writeFileSync(statusPath, JSON.stringify({ state, pid: process.pid, generation, version: SOURCE_VERSION, updatedAt: new Date().toISOString(), ...(error ? { error } : {}) }, null, 2) + "\n");
+  const waiting = await withArchiveLock(asarPath, () => {
+    if (generation && !installIsCurrent(runtimeDir, generation)) return false;
+    generation ||= setInstallControl(runtimeDir, true).generation;
+    fs.mkdirSync(runtimeDir, { recursive: true });
     status("waiting");
-    info(`waiting for ZCode to exit before installing v${SOURCE_VERSION}; app.asar is unchanged while waiting.`);
-    await waitForZCodeExit();
-    status("installing");
-    cmdInstall(asarPath, runtimeDir, resetConfig, false);
-    status("installed");
-    info("installation finished; start ZCode normally.");
+    return true;
+  });
+  if (!waiting) {
+    info("installation cancelled before waiting; app.asar left untouched.");
+    return;
+  }
+  info(`waiting for ZCode to exit before installing v${SOURCE_VERSION}; app.asar is unchanged while waiting.`);
+  try {
+    await waitForZCodeExit({ isCancelled: () => !installIsCurrent(runtimeDir, generation) });
+    await withArchiveLock(asarPath, () => {
+      let current = null;
+      try { current = JSON.parse(fs.readFileSync(statusPath, "utf8")); } catch (e) { }
+      if (!installIsCurrent(runtimeDir, generation) || current?.state !== "waiting" || current.pid !== process.pid) {
+        info("installation cancelled while waiting; app.asar left untouched.");
+        return;
+      }
+      status("installing");
+      cmdInstall(asarPath, runtimeDir, resetConfig, false, noAutostart);
+      status("installed");
+      info("installation finished; start ZCode normally.");
+    });
   } catch (e) {
-    status("failed", e.message);
+    await withArchiveLock(asarPath, () => {
+      if (installIsCurrent(runtimeDir, generation)) status("failed", e.message);
+    });
     throw e;
   }
 }
@@ -378,23 +588,44 @@ const opt = (name) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 
-switch (cmd) {
-  case "install": {
-    const asarPath = resolveAsar(opt("--asar"));
-    if (args.includes("--after-exit")) scheduleInstall(asarPath, opt("--runtime"), args.includes("--reset-config"));
-    else if (args.includes("--wait-for-exit")) await installAfterExit(asarPath, opt("--runtime"), args.includes("--reset-config"));
-    else cmdInstall(asarPath, opt("--runtime"), args.includes("--reset-config"), args.includes("--allow-running"));
-    break;
+try {
+  switch (cmd) {
+    case "install": {
+      const asarPath = resolveAsar(opt("--asar"));
+      const runtimeDir = path.resolve(opt("--runtime") || path.join(os.homedir(), ".zcode", "zcode-prompt-enhancer"));
+      const noAutostart = args.includes("--no-autostart");
+      const resetConfig = args.includes("--reset-config");
+      if (args.includes("--wait-for-exit")) {
+        await installAfterExit(asarPath, runtimeDir, resetConfig, noAutostart, opt("--generation"));
+      } else {
+        await withArchiveLock(asarPath, () => {
+          const control = setInstallControl(runtimeDir, true);
+          if (args.includes("--after-exit")) scheduleInstall(asarPath, runtimeDir, resetConfig, noAutostart, control.generation);
+          else cmdInstall(asarPath, runtimeDir, resetConfig, args.includes("--allow-running"), noAutostart);
+        });
+      }
+      break;
+    }
+    case "ensure": {
+      const asarPath = resolveAsar(opt("--asar"));
+      await withArchiveLock(asarPath, () => cmdEnsure(asarPath, opt("--runtime"), args.includes("--allow-running")));
+      break;
+    }
+    case "remove": {
+      const asarPath = resolveAsar(opt("--asar"));
+      await withArchiveLock(asarPath, () => cmdRemove(asarPath, opt("--runtime"), args.includes("--purge"), args.includes("--allow-running")));
+      break;
+    }
+    case "check":
+      cmdCheck(resolveAsar(opt("--asar")));
+      break;
+    case "doctor":
+      cmdDoctor(opt("--runtime"), opt("--asar"));
+      break;
+    default:
+      fail("usage: node patch-desktop.mjs <install|ensure|remove|check|doctor> [--asar <app.asar>] [--runtime <dir>] [--purge] [--reset-config] [--no-autostart] [--after-exit] [--allow-running (skip the running-app check; see header)]");
   }
-  case "remove":
-    cmdRemove(resolveAsar(opt("--asar")), args.includes("--purge"), args.includes("--allow-running"));
-    break;
-  case "check":
-    cmdCheck(resolveAsar(opt("--asar")));
-    break;
-  case "doctor":
-    cmdDoctor(opt("--runtime"), opt("--asar"));
-    break;
-  default:
-    fail("usage: node patch-desktop.mjs <install|remove|check|doctor> [--asar <app.asar>] [--runtime <dir>] [--purge] [--reset-config] [--after-exit] [--allow-running (skip the running-app check; see header)]");
+} catch (e) {
+  console.error("[zcode-prompt-enhancer] " + e.message);
+  process.exitCode = 1;
 }

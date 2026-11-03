@@ -15,6 +15,7 @@ if errorlevel 1 (
 )
 echo The installer waits until every ZCode.exe process exits.
 echo It will not force-close or restart ZCode. Keep this window open.
+echo Auto-repatch is enabled unless opted out; see the reported trigger mode below.
 echo.
 node "%~dp0patch-desktop.mjs" install --wait-for-exit %*
 set RC=%ERRORLEVEL%
@@ -24,6 +25,7 @@ if not "%RC%"=="0" (
 ) else (
   echo [OK] Restart ZCode. A star button appears in the composer toolbar.
   echo Generation uses the current session model - no API key needed.
+  echo Check auto-repatch above: scheduled checks, next-logon fallback, or disabled.
 )
 echo.
 pause
