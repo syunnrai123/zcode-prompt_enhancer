@@ -21,6 +21,7 @@ class Node {
     this.value = "";
     this.disabled = false;
     this.inert = false;
+    this.scrollTop = 0;
     this._html = "";
     this._text = "";
     this.classList = {
@@ -87,14 +88,14 @@ class Node {
     for (const fn of this.listeners[name] || []) fn(event);
   }
   click() { if (!this.disabled) this.fire("click"); }
-  focus() {}
+  focus() { this.document.activeElement = this; }
 }
 
 function harness({ lexical = true, composers = 1, available = true } = {}) {
   let now = 10000;
   const timers = new Map();
   let nextTimer = 0;
-  const document = { documentElement: { lang: "zh-CN" } };
+  const document = { documentElement: { lang: "zh-CN" }, activeElement: null };
   document.body = new Node("body", document);
   document.head = new Node("head", document);
   document.createElement = (tag) => new Node(tag, document);
@@ -183,6 +184,7 @@ function controls(view) {
     dirtyBadge: panel.querySelector(".pe-dirty-badge"),
     close: panel.querySelector(".pe-panel-x"),
     status: panel.querySelector(".pe-panel-status"),
+    statusText: panel.querySelector(".pe-panel-status-text"),
   };
 }
 
@@ -226,16 +228,74 @@ test("generation uses the current session context; apply and revert manage the d
   assert.equal(h.generation.calls.length, 1);
   assert.deepEqual(h.generation.calls[0].context.selection, { providerId: "provider-a", modelId: "model-a" });
   assert.match(c.button.innerHTML, /■.*停止/);
+  assert.equal(c.status.getAttribute("aria-live"), "off", "the ticking timer is not announced");
   h.generation.pending[0].resolve({ text: "enhanced text" });
   await h.settle();
   assert.equal(c.textarea.value, "enhanced text");
   assert.equal(c.apply.disabled, false);
+  assert.equal(c.status.getAttribute("aria-live"), "polite", "the finished state is announced");
   c.apply.click();
   assert.equal(v.getDraft(), "enhanced text");
   c.close.click(); c.button.click();
   assert.equal(h.generation.calls.length, 1, "reopening does not regenerate");
   c.revert.click();
   assert.equal(v.getDraft(), original);
+});
+
+test("status switches to polite before the finished text is written", async () => {
+  const h = harness();
+  const c = controls(h.views[0]);
+  c.button.click();
+  let liveAtWrite = null;
+  Object.defineProperty(c.statusText, "textContent", {
+    configurable: true,
+    get() { return this._text; },
+    set(value) { liveAtWrite = c.status.getAttribute("aria-live"); this._text = String(value); },
+  });
+  h.generation.pending[0].resolve({ text: "done" });
+  await h.settle();
+  assert.equal(liveAtWrite, "polite", "the mutation happens while the live region is on");
+});
+
+test("the first error is written after the panel becomes visible", async () => {
+  const h = harness({ available: false });
+  const c = controls(h.views[0]);
+  let displayAtWrite = null;
+  let first = true;
+  Object.defineProperty(c.statusText, "textContent", {
+    configurable: true,
+    get() { return this._text; },
+    set(value) {
+      if (first) { first = false; displayAtWrite = c.panel.style.display; }
+      this._text = String(value);
+    },
+  });
+  c.button.click();
+  await h.settle();
+  assert.equal(displayAtWrite, "flex", "the live region exists before its first message");
+  assert.match(c.statusText.textContent, /host patch missing|输入框读写桥未就绪/);
+});
+
+test("status text is a keyboard scroll target only for warnings and errors", async () => {
+  const empty = harness();
+  const ec = controls(empty.views[0]);
+  empty.views[0].input.__zcodeLexicalInputE2E.setText("");
+  ec.button.click();
+  assert.equal(ec.statusText.getAttribute("tabindex"), "0", "empty-draft warning is focusable");
+
+  const busy = harness();
+  const bc = controls(busy.views[0]);
+  bc.button.click();
+  assert.equal(bc.statusText.getAttribute("tabindex"), null, "the busy ticker is not a tab stop");
+  busy.generation.pending[0].resolve({ text: "done" });
+  await busy.settle();
+  assert.equal(bc.statusText.getAttribute("tabindex"), null, "the ready state is not a tab stop");
+
+  const failed = harness({ available: false });
+  const fc = controls(failed.views[0]);
+  fc.button.click();
+  await failed.settle();
+  assert.equal(fc.statusText.getAttribute("tabindex"), "0", "an error is focusable");
 });
 
 test("validated Host output reaches preview and applies only after confirmation", async () => {
@@ -302,6 +362,7 @@ test("Host validation failures leave preview empty and cannot replace the draft"
     assert.equal(c.textarea.value, "");
     assert.equal(c.apply.disabled, true);
     assert.match(c.status.className, /pe-error/);
+    assert.match(c.status.className, /pe-tone-error/);
     assert.equal(c.historyBox.children.length, 0);
     c.apply.click();
     assert.equal(v.getDraft(), original);
@@ -317,7 +378,7 @@ test("stop cancels exactly the running generation and clears the timer", async (
   assert.equal(h.generation.cancelled, 1);
   assert.equal(h.timers.size, 1);
   assert.match(c.button.innerHTML, /✦.*增强/);
-  assert.match(c.status.textContent, /取消/);
+  assert.match(c.statusText.textContent, /取消/);
   h.generation.pending[0].resolve({ text: "late result" });
   await h.settle();
   assert.equal(c.textarea.value, "", "late result never reaches the preview");
@@ -348,7 +409,7 @@ test("model switch stops the old generation; retry uses the new selection", asyn
   selection = { providerId: "provider-b", modelId: "model-b" };
   h.tick();
   assert.equal(h.generation.cancelled, 1);
-  assert.match(c.status.textContent, /模型已切换/);
+  assert.match(c.statusText.textContent, /模型已切换/);
   c.retry.click();
   assert.equal(h.generation.calls[1].context.selection.providerId, "provider-b");
 });
@@ -394,7 +455,7 @@ test("missing host bridge or lexical bridge fails before generation", () => {
     const h = harness(options);
     const c = controls(h.views[0]);
     c.button.click();
-    assert.match(c.status.textContent, /host patch missing|输入框读写桥未就绪/);
+    assert.match(c.statusText.textContent, /host patch missing|输入框读写桥未就绪/);
     assert.equal(h.generation.calls.length, 0);
     assert.match(c.button.innerHTML, /增强/);
   }
@@ -407,7 +468,7 @@ test("hard timeout cancels its own request", async () => {
   h.advance(120001);
   h.tick();
   assert.equal(h.generation.cancelled, 1);
-  assert.match(c.status.textContent, /超时/);
+  assert.match(c.statusText.textContent, /超时/);
 });
 
 test("repeated apply still restores the original draft", async () => {
@@ -439,7 +500,7 @@ test("unchanged draft reuses the last result; retry is the only regeneration pat
   c.button.click();
   assert.equal(h.generation.calls.length, 1, "same draft does not trigger a second generation");
   assert.equal(c.textarea.value, "enhanced once");
-  assert.match(c.status.textContent, /复用/);
+  assert.match(c.statusText.textContent, /复用/);
   c.retry.click();
   assert.equal(h.generation.calls.length, 2, "panel retry regenerates");
   h.generation.pending[1].resolve({ text: "enhanced twice" });
@@ -464,7 +525,9 @@ test("empty composer clears the preview instead of keeping stale results", async
   c.button.click();
   assert.equal(h.generation.calls.length, 1, "no generation for an empty composer");
   assert.equal(c.textarea.value, "");
-  assert.match(c.status.textContent, /输入框为空/);
+  assert.match(c.statusText.textContent, /输入框为空/);
+  assert.match(c.status.className, /pe-tone-warn/, "an empty draft is a hint, not a failure");
+  assert.doesNotMatch(c.status.className, /pe-error/);
   assert.equal(c.apply.disabled, true);
 
   // applied results must not leak back either once the composer is emptied
@@ -529,7 +592,7 @@ test("history entry click loads the text; regenerating replaces the entry", asyn
   const items = c.historyBox.querySelectorAll(".pe-history-item");
   assert.equal(items.length, 1, "retry on the same draft replaces, not duplicates");
   assert.equal(items[0].querySelector(".pe-history-text").textContent, "second");
-  items[0].click();
+  items[0].querySelector(".pe-history-load").click();
   assert.equal(c.textarea.value, "second");
   assert.equal(c.apply.disabled, false);
 });
@@ -547,7 +610,7 @@ test("reuse keeps hand-edited preview content", async () => {
   c.button.click();
   assert.equal(h.generation.calls.length, 1, "no regeneration");
   assert.equal(c.textarea.value, "my hand edit", "hand edit survives the reuse reopen");
-  assert.match(c.status.textContent, /复用/);
+  assert.match(c.statusText.textContent, /复用/);
 });
 
 test("whitespace-only draft drift still reuses the last result", async () => {
@@ -577,7 +640,7 @@ test("retry with an empty composer clears the panel and collapses history", asyn
   c.retry.click();
   assert.equal(h.generation.calls.length, 1, "no generation for an empty composer");
   assert.equal(c.textarea.value, "");
-  assert.match(c.status.textContent, /输入框为空/);
+  assert.match(c.statusText.textContent, /输入框为空/);
   assert.equal(c.historyBox.style.display, "none", "clear path folds the history box");
 });
 
@@ -602,10 +665,50 @@ test("history entries are keyboard operable", async () => {
   await h.settle();
   c.historyToggle.click();
   const item = c.historyBox.querySelectorAll(".pe-history-item")[0];
-  assert.equal(item.getAttribute("role"), "button");
-  assert.equal(item.getAttribute("tabindex"), "0");
-  item.fire("keydown", { key: "Enter" });
+  assert.equal(item.getAttribute("role"), null, "the row is a container, not a nested button");
+  const load = item.querySelector(".pe-history-load");
+  assert.equal(load.tagName, "BUTTON", "the row action is a real button");
+  assert.match(load.getAttribute("aria-label"), /载入/);
+  load.click();
   assert.equal(c.textarea.value, "kbd result");
+});
+
+test("history exposes an expanded state and separate row/delete buttons", async () => {
+  const h = harness();
+  const c = controls(h.views[0]);
+  c.button.click();
+  h.generation.pending[0].resolve({ text: "entry" });
+  await h.settle();
+  assert.equal(c.historyToggle.getAttribute("aria-expanded"), "false");
+  assert.equal(c.historyToggle.getAttribute("aria-controls"), c.historyBox.id);
+  c.historyToggle.click();
+  assert.equal(c.historyToggle.getAttribute("aria-expanded"), "true");
+  const item = c.historyBox.querySelector(".pe-history-item");
+  assert.equal(item.querySelectorAll("button").length, 2, "load and delete are siblings");
+  assert.ok(item.querySelector(".pe-history-load"));
+  assert.ok(item.querySelector(".pe-history-del"));
+  c.historyToggle.click();
+  assert.equal(c.historyToggle.getAttribute("aria-expanded"), "false");
+});
+
+test("rebuilding an open history list keeps focus on the same entry", async () => {
+  const h = harness({ composers: 2 });
+  const a = controls(h.views[0]);
+  const b = controls(h.views[1]);
+  b.button.click();
+  a.button.click();
+  h.generation.pending[1].resolve({ text: "from a" });
+  await h.settle();
+  a.historyToggle.click();
+  const load = a.historyBox.querySelector(".pe-history-load");
+  load.focus();
+  assert.equal(h.document.activeElement, load);
+  h.generation.pending[0].resolve({ text: "from b" });
+  await h.settle();
+  const active = h.document.activeElement;
+  assert.equal(active.tagName, "BUTTON");
+  assert.match(active.className, /pe-history-load/);
+  assert.equal(active.getAttribute("data-history-id"), load.getAttribute("data-history-id"), "focus follows the entry, not the row index");
 });
 
 test("history dedupes per session: the same draft in two sessions keeps both entries", async () => {
