@@ -10,6 +10,7 @@ dist-test/
 .pe-new.tmp.*
 
 # Editor / OS noise
+.idea/
 .DS_Store
 Thumbs.db
 Desktop.ini

@@ -81,7 +81,7 @@ ZCode 每次发版都会重新压缩 Host bundle 里的注册标识（`.register
 从源码安装：
 
 ```bash
-cd /d E:\JSProjects\zcode-plugin-prompt-enhancer\plugins\prompt-enhancer
+cd plugins\prompt-enhancer
 npm install && npm run build          # build 会同时生成 system-prompt.generated.js
 node desktop\patch-desktop.mjs install            # 自动探测 app.asar；也可 --asar <路径>
 ```
