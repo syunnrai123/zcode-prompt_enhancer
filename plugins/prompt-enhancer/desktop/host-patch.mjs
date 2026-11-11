@@ -159,11 +159,22 @@ function analyzeHost(text) {
     }
     return true;
   };
+  /* Minifiers sometimes hoist the returned object into a local binding:
+   *   function create(e){ let service={...}; ...; return service }
+   * Accept that only when the binding is provably still the same immutable
+   * object literal (single declaration, no rebinding, no conditional init). */
+  const serviceValue = (value) => {
+    const node = lastExpression(value);
+    if (serviceObject(node)) return true;
+    if (node?.type !== "Identifier") return false;
+    const binding = bindingOf(node);
+    return Boolean(binding) && stable(binding, node) && serviceObject(binding.init);
+  };
   const factoryReturnsService = (callee) => {
     const binding = bindingOf(callee);
     if (!stable(binding, callee) || !isFunction(binding.init) || binding.init.async || binding.init.generator) return false;
     const fn = binding.init;
-    if (fn.body.type !== "BlockStatement") return serviceObject(lastExpression(fn.body));
+    if (fn.body.type !== "BlockStatement") return serviceValue(fn.body);
     if (fn.body.body.at(-1)?.type !== "ReturnStatement") return false;
     const returns = [];
     const collect = (node) => {
@@ -172,7 +183,7 @@ function analyzeHost(text) {
       for (const child of children(node)) collect(child);
     };
     collect(fn.body);
-    return returns.length > 0 && returns.every((value) => serviceObject(lastExpression(value)));
+    return returns.length > 0 && returns.every(serviceValue);
   };
   const registrations = [], wrapped = [];
   for (const call of nodes) {

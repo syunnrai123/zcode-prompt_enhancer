@@ -75,6 +75,32 @@ test("factory proof accepts declarations, expressions, arrows and real minifier 
   }
 });
 
+test("factory may return a stable local binding initialized with the service literal (3.18 shape)", () => {
+  for (const factory of [
+    'function mk(){let svc={async generateWorkspaceText(){}};return svc}',
+    'function mk(){let svc={async generateWorkspaceText(){}};return mark(svc,"service"),svc}',
+    'function mk(){var svc={async generateWorkspaceText(){}},other=1;return svc}',
+    'const mk=function(){const svc={async generateWorkspaceText(){}};return svc};',
+    'var svc={async generateWorkspaceText(){}};const mk=()=>svc;'
+  ]) {
+    assert.equal(deriveRegistrationVariant(factory + TOKEN + SERVICE + CALL), ".register(zz,yy)");
+    roundTrip(factory + TOKEN + SERVICE + CALL);
+  }
+});
+
+test("returned binding proof rejects rebinding, conditional init and non-literal values", () => {
+  for (const factory of [
+    'function mk(){let svc={async generateWorkspaceText(){}};svc=other;return svc}',
+    'function mk(){return svc;let svc={async generateWorkspaceText(){}}}',
+    'function mk(){if(flag){let svc={async generateWorkspaceText(){}};return svc}return other}',
+    'function mk(svc){return svc}',
+    'function mk(){let svc={generateWorkspaceText:1};return svc}',
+    'function mk(){let svc={};return svc}',
+    'function mk(){let svc=external();return svc}',
+    'function mk(){let svc={async generateWorkspaceText(){}};return other}'
+  ]) refuses(factory + TOKEN + SERVICE + CALL);
+});
+
 test("factory result must itself expose the method, not an unrelated literal elsewhere", () => {
   for (const factory of [
     'function mk(){return{}}',
