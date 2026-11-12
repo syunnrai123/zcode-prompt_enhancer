@@ -125,6 +125,19 @@ node desktop\patch-desktop.mjs doctor
 安装、补回、卸载共用跨进程锁，异常退出留下锁时会报超时及锁路径，不会擅自抢占锁；
 确认没有其他安装进程后再按错误提示清理陈旧锁。
 
+**日志**：所有输出行都带 ISO 时间戳。计划任务是以隐藏方式运行 `ensure` 的，没有 stdout 可继承，
+所以每次 `ensure` 的决策会显式追加到运行目录的 `install.log`：
+
+```
+2026-11-12T13:52:45.072Z [zcode-prompt-enhancer] ensure: app.asar is official — a ZCode update removed the patch.
+2026-11-12T13:52:45.073Z [zcode-prompt-enhancer] ensure: ZCode is running; arming the installer for its next exit.
+2026-11-12T13:52:45.101Z [zcode-prompt-enhancer] installer scheduled (pid 4496); ...
+```
+
+排查"更新后没自动补回"时，先看这几行即可区分：没打补丁却从未出现 `ensure:`（任务没跑）、
+出现了但停在 `arming`（ZCode 一直没退出）、或出现 `already patched`（不需要补）。
+`install.log` 超过 512 KiB 时轮转为 `install.log.old`，不会无限增长。
+
 ## 卸载（还原 ZCode 官方状态）
 
 ```bash

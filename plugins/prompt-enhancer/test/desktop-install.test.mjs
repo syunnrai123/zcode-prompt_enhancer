@@ -122,6 +122,15 @@ test("ensure patches an official archive, then leaves a patched one untouched", 
   const second = run("ensure");
   assert.match(second, /nothing to do/);
   assert.ok(fs.readFileSync(asar).equals(before), "ensure must not rewrite a patched archive");
+
+  // The scheduled task runs ensure hidden, with no stdout to inherit: the
+  // decision has to survive in install.log, timestamped, or a missed repair
+  // leaves no evidence at all.
+  const log = fs.readFileSync(path.join(runtime, "install.log"), "utf8");
+  assert.match(log, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \[zcode-prompt-enhancer\] ensure: app\.asar is official/m);
+  assert.match(log, /\[zcode-prompt-enhancer\] ensure: patching now\./);
+  assert.match(log, /\[zcode-prompt-enhancer\] ensure: already patched and runtime is current; nothing to do\./);
+  assert.match(first, /^\d{4}-\d{2}-\d{2}T\S+ \[zcode-prompt-enhancer\] ensure: /m, "stdout lines carry the timestamp too");
 });
 
 test("installer patches main and host, then remove restores both entries", (t) => {

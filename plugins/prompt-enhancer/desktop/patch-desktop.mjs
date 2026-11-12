@@ -107,11 +107,36 @@ function readSourceVersion() {
   return "0.0.0";
 }
 
+const LOG_MAX_BYTES = 512 * 1024;
+
+/* Every line is timestamped so install.log can be correlated with ZCode
+ * updates, task runs and archive mtimes after the fact. */
+function stamp() {
+  return new Date().toISOString();
+}
+
 function fail(msg) {
   throw new Error(msg);
 }
 function info(msg) {
-  console.log("[zcode-prompt-enhancer] " + msg);
+  console.log(stamp() + " [zcode-prompt-enhancer] " + msg);
+}
+
+/* The scheduled-task path runs `ensure` hidden, with no stdout to inherit, so
+ * its decisions would otherwise leave no trace at all. Append them to the same
+ * install.log the background installer writes (rotating once it grows). */
+function ensureNote(runtimeDir, message) {
+  info("ensure: " + message);
+  const logPath = path.join(runtimeDir, "install.log");
+  try {
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    try {
+      if (fs.statSync(logPath).size > LOG_MAX_BYTES) fs.renameSync(logPath, logPath + ".old");
+    } catch (e) { }
+    fs.writeFileSync(logPath, `${stamp()} [zcode-prompt-enhancer] ensure: ${message}\n`, { flag: "a" });
+  } catch (e) {
+    // Diagnostics must never break the repair path.
+  }
 }
 
 /* Discovery order: ZCODE_ASAR env override wins, then the common install
@@ -442,7 +467,7 @@ function cmdEnsure(asarPath, runtimeExplicit, allowRunning) {
   );
   const control = readInstallControl(runtimeDir);
   if (control && !control.enabled) {
-    info("ensure: desktop integration was removed; automatic repair is disabled.");
+    ensureNote(runtimeDir, "desktop integration was removed; automatic repair is disabled.");
     return;
   }
   const generation = control?.generation || setInstallControl(runtimeDir, true).generation;
@@ -463,20 +488,21 @@ function cmdEnsure(asarPath, runtimeExplicit, allowRunning) {
   if (patched) {
     const state = runtimeState(runtimeDir);
     if (state.current) {
-      info("ensure: already patched and runtime is current; nothing to do.");
+      ensureNote(runtimeDir, "already patched and runtime is current; nothing to do.");
       return;
     }
     copyRuntime(runtimeDir, false);
-    info(`ensure: archive is patched; runtime refreshed (${state.version ?? "unknown"} -> ${SOURCE_VERSION}).`);
+    ensureNote(runtimeDir, `archive is patched; runtime refreshed (${state.version ?? "unknown"} -> ${SOURCE_VERSION}).`);
     return;
   }
 
-  info("ensure: app.asar is official — a ZCode update removed the patch.");
+  ensureNote(runtimeDir, "app.asar is official — a ZCode update removed the patch.");
   if (isZCodeRunning() && !allowRunning) {
-    info("ensure: ZCode is running; installing as soon as it exits.");
+    ensureNote(runtimeDir, "ZCode is running; arming the installer for its next exit.");
     scheduleInstall(asarPath, runtimeDir, false, false, generation);
     return;
   }
+  ensureNote(runtimeDir, "patching now.");
   cmdInstall(asarPath, runtimeDir, false, allowRunning, false);
 }
 
@@ -626,6 +652,6 @@ try {
       fail("usage: node patch-desktop.mjs <install|ensure|remove|check|doctor> [--asar <app.asar>] [--runtime <dir>] [--purge] [--reset-config] [--no-autostart] [--after-exit] [--allow-running (skip the running-app check; see header)]");
   }
 } catch (e) {
-  console.error("[zcode-prompt-enhancer] " + e.message);
+  console.error(stamp() + " [zcode-prompt-enhancer] " + e.message);
   process.exitCode = 1;
 }
